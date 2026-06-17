@@ -1,14 +1,12 @@
-import { pgTable, serial, timestamp, text, varchar, date, jsonb, boolean, index, integer, unique } from "drizzle-orm/pg-core"
-import { sql } from "drizzle-orm"
+import { mysqlTable, serial, timestamp, text, varchar, date, json, boolean, index, int, unique } from "drizzle-orm/mysql-core"
 
-
-export const healthCheck = pgTable("health_check", {
-	id: serial().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+export const healthCheck = mysqlTable("health_check", {
+	id: serial().primaryKey(),
+	updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
 });
 
 // 日报表
-export const dailyReports = pgTable(
+export const dailyReports = mysqlTable(
 	"daily_reports",
 	{
 		id: serial().primaryKey(),
@@ -16,10 +14,10 @@ export const dailyReports = pgTable(
 		title: varchar("title", { length: 200 }).notNull(),
 		content: text("content").notNull(),
 		mood: varchar("mood", { length: 50 }),
-		tags: jsonb("tags"),
+		tags: json("tags"),
 		is_published: boolean("is_published").default(true).notNull(),
-		created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-		updated_at: timestamp("updated_at", { withTimezone: true }),
+		created_at: timestamp("created_at").defaultNow().notNull(),
+		updated_at: timestamp("updated_at").defaultNow().onUpdateNow(),
 	},
 	(table) => [
 		index("daily_reports_date_idx").on(table.date),
@@ -28,7 +26,7 @@ export const dailyReports = pgTable(
 );
 
 // 周报表
-export const weeklyReports = pgTable(
+export const weeklyReports = mysqlTable(
 	"weekly_reports",
 	{
 		id: serial().primaryKey(),
@@ -36,8 +34,8 @@ export const weeklyReports = pgTable(
 		week_end_date: date("week_end_date").notNull(),
 		summary: text("summary").notNull(),
 		is_published: boolean("is_published").default(true).notNull(),
-		created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-		updated_at: timestamp("updated_at", { withTimezone: true }),
+		created_at: timestamp("created_at").defaultNow().notNull(),
+		updated_at: timestamp("updated_at").defaultNow().onUpdateNow(),
 	},
 	(table) => [
 		index("weekly_reports_week_start_date_idx").on(table.week_start_date),
@@ -46,14 +44,14 @@ export const weeklyReports = pgTable(
 );
 
 // 分类
-export const categories = pgTable(
+export const categories = mysqlTable(
 	"categories",
 	{
 		id: serial().primaryKey(),
 		name: varchar("name", { length: 100 }).notNull().unique(),
 		icon: varchar("icon", { length: 50 }),
-		sort_order: integer("sort_order").default(0).notNull(),
-		created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		sort_order: int("sort_order").default(0).notNull(),
+		created_at: timestamp("created_at").defaultNow().notNull(),
 	},
 	(table) => [
 		index("categories_sort_order_idx").on(table.sort_order),
@@ -61,28 +59,28 @@ export const categories = pgTable(
 );
 
 // 标签
-export const tags = pgTable(
+export const tags = mysqlTable(
 	"tags",
 	{
 		id: serial().primaryKey(),
 		name: varchar("name", { length: 50 }).notNull().unique(),
 		color: varchar("color", { length: 20 }),
-		created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		created_at: timestamp("created_at").defaultNow().notNull(),
 	}
 );
 
 // 笔记
-export const notes = pgTable(
+export const notes = mysqlTable(
 	"notes",
 	{
 		id: serial().primaryKey(),
 		title: varchar("title", { length: 200 }).notNull(),
 		content: text("content").notNull(),
-		category_id: integer("category_id").references(() => categories.id, { onDelete: "set null" }),
+		category_id: int("category_id").references(() => categories.id, { onDelete: "set null" }),
 		is_pinned: boolean("is_pinned").default(false).notNull(),
 		is_archived: boolean("is_archived").default(false).notNull(),
-		created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-		updated_at: timestamp("updated_at", { withTimezone: true }),
+		created_at: timestamp("created_at").defaultNow().notNull(),
+		updated_at: timestamp("updated_at").defaultNow().onUpdateNow(),
 	},
 	(table) => [
 		index("notes_category_id_idx").on(table.category_id),
@@ -93,11 +91,11 @@ export const notes = pgTable(
 );
 
 // 笔记-标签关联表
-export const noteTags = pgTable(
+export const noteTags = mysqlTable(
 	"note_tags",
 	{
-		note_id: integer("note_id").notNull().references(() => notes.id, { onDelete: "cascade" }),
-		tag_id: integer("tag_id").notNull().references(() => tags.id, { onDelete: "cascade" }),
+		note_id: int("note_id").notNull().references(() => notes.id, { onDelete: "cascade" }),
+		tag_id: int("tag_id").notNull().references(() => tags.id, { onDelete: "cascade" }),
 	},
 	(table) => [
 		unique("note_tags_note_id_tag_id_key").on(table.note_id, table.tag_id),

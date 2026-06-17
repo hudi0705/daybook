@@ -1,87 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-
-interface Note {
-  id: number;
-  title: string;
-  content: string;
-  category_id?: number;
-  tags?: string[];
-  is_pinned: boolean;
-  is_archived: boolean;
-  created_at: string;
-  updated_at?: string;
-}
+import { getDb } from '@/storage/database/mysql-client';
+import { notes } from '@/storage/database/shared/schema';
+import { eq, and, like, or, desc, sql } from 'drizzle-orm';
 
 // GET - 获取笔记列表（支持分页、筛选、搜索）
 export async function GET(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const categoryId = searchParams.get('category_id');
-  const tag = searchParams.get('tag');
   const search = searchParams.get('search');
   const isArchived = searchParams.get('is_archived');
   const page = parseInt(searchParams.get('page') || '1');
   const pageSize = parseInt(searchParams.get('page_size') || '20');
 
   try {
-    // 获取单个笔记
     if (id) {
-      const { data, error } = await client
-        .from('notes')
-        .select('*')
-        .eq('id', parseInt(id))
-        .maybeSingle();
-
-      if (error) throw new Error(`获取笔记失败: ${error.message}`);
-      return NextResponse.json({ success: true, data });
+      const data = await db.select().from(notes).where(eq(notes.id, parseInt(id))).limit(1);
+      return NextResponse.json({ success: true, data: data[0] || null });
     }
 
-    // 构建列表查询
-    let query = client
-      .from('notes')
-      .select('*', { count: 'exact' })
-      .order('is_pinned', { ascending: false })
-      .order('updated_at', { ascending: false });
+    const conditions = [];
 
-    // 按分类筛选
     if (categoryId) {
-      query = query.eq('category_id', parseInt(categoryId));
+      conditions.push(eq(notes.category_id, parseInt(categoryId)));
     }
 
-    // 按标签筛选（JSONB 数组包含查询）
-    if (tag) {
-      query = query.contains('tags', [tag]);
-    }
-
-    // 按关键词搜索（标题和内容）
     if (search) {
-      query = query.or(`title.ilike.%${search}%,content.ilike.%${search}%`);
+      conditions.push(or(like(notes.title, `%${search}%`), like(notes.content, `%${search}%`)));
     }
 
-    // 是否已归档
     if (isArchived !== null && isArchived !== undefined) {
-      query = query.eq('is_archived', isArchived === 'true');
+      conditions.push(eq(notes.is_archived, isArchived === 'true'));
     } else {
-      // 默认不返回归档笔记
-      query = query.eq('is_archived', false);
+      conditions.push(eq(notes.is_archived, false));
     }
 
-    // 分页
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notes)
+      .where(whereClause);
+
     const offset = (page - 1) * pageSize;
-    query = query.range(offset, offset + pageSize - 1);
+    const data = await db
+      .select()
+      .from(notes)
+      .where(whereClause)
+      .orderBy(desc(notes.is_pinned), desc(notes.updated_at))
+      .limit(pageSize)
+      .offset(offset);
 
-    const { data, error, count } = await query;
-
-    if (error) throw new Error(`获取笔记列表失败: ${error.message}`);
     return NextResponse.json({
       success: true,
-      data: data as Note[],
+      data,
       pagination: {
         page,
         page_size: pageSize,
-        total: count || 0,
+        total: countResult.count || 0,
       },
     });
   } catch (err) {
@@ -92,11 +69,11 @@ export async function GET(request: NextRequest) {
 
 // POST - 创建新笔记
 export async function POST(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
 
   try {
     const body = await request.json();
-    const { title, content, category_id, tags } = body;
+    const { title, content, category_id } = body;
 
     if (!title || !content) {
       return NextResponse.json(
@@ -105,22 +82,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data, error } = await client
-      .from('notes')
-      .insert({
-        title,
-        content,
-        category_id: category_id || null,
-        tags: tags || null,
-        is_pinned: false,
-        is_archived: false,
-      })
-      .select()
-      .single();
+    const result = await db.insert(notes).values({
+      title,
+      content,
+      category_id: category_id || null,
+      is_pinned: false,
+      is_archived: false,
+    });
 
-    if (error) throw new Error(`创建笔记失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data: data as Note });
+    const data = await db.select().from(notes).where(eq(notes.id, result[0].insertId)).limit(1);
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
@@ -129,7 +100,7 @@ export async function POST(request: NextRequest) {
 
 // PUT - 更新笔记
 export async function PUT(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
 
   try {
     const body = await request.json();
@@ -143,7 +114,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
     };
 
     if (title !== undefined) updateData.title = title;
@@ -153,16 +124,10 @@ export async function PUT(request: NextRequest) {
     if (is_pinned !== undefined) updateData.is_pinned = is_pinned;
     if (is_archived !== undefined) updateData.is_archived = is_archived;
 
-    const { data, error } = await client
-      .from('notes')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
+    await db.update(notes).set(updateData).where(eq(notes.id, id));
+    const data = await db.select().from(notes).where(eq(notes.id, id)).limit(1);
 
-    if (error) throw new Error(`更新笔记失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data: data as Note });
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
@@ -171,7 +136,7 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - 删除笔记
 export async function DELETE(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 
@@ -183,15 +148,10 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const { data, error } = await client
-      .from('notes')
-      .delete()
-      .eq('id', parseInt(id))
-      .select();
+    const data = await db.select().from(notes).where(eq(notes.id, parseInt(id))).limit(1);
+    await db.delete(notes).where(eq(notes.id, parseInt(id)));
 
-    if (error) throw new Error(`删除笔记失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });

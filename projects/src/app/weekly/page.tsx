@@ -7,7 +7,10 @@ import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/components/ui/empty';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CalendarIcon, SparklesIcon, TrashIcon, RefreshCwIcon, ArrowLeftIcon, CheckCircle2Icon, Wand2Icon, ListChecksIcon } from 'lucide-react';
+import { AiSettingsDialog } from '@/components/ai-settings-dialog';
+import { loadAiConfig, type AiProviderConfig } from '@/lib/ai-config';
+import { CalendarIcon, SparklesIcon, TrashIcon, RefreshCwIcon, ArrowLeftIcon, CheckCircle2Icon, Wand2Icon, ListChecksIcon, SettingsIcon } from 'lucide-react';
+import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Link from 'next/link';
@@ -41,6 +44,9 @@ export default function WeeklyPage() {
   const [loading, setLoading] = useState(true);
   const [expandedReport, setExpandedReport] = useState<number | null>(null);
   
+  // AI 设置弹窗
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // 周报生成流程状态
   const [step, setStep] = useState<'idle' | 'extracting' | 'selecting' | 'generating'>('idle');
   const [extractedPoints, setExtractedPoints] = useState<string[]>([]);
@@ -84,10 +90,17 @@ export default function WeeklyPage() {
 
   // Step 1: 提取重点信息
   const handleExtractPoints = async () => {
+    const aiConfig = loadAiConfig();
+    if (!aiConfig) {
+      setSettingsOpen(true);
+      toast.error('请先配置 AI 模型');
+      return;
+    }
+
     const weekStart = getThisWeekStart();
     setStep('extracting');
     setWeekStartDate(weekStart);
-    
+
     try {
       const response = await fetch('/api/weekly-reports/generate', {
         method: 'POST',
@@ -95,9 +108,10 @@ export default function WeeklyPage() {
         body: JSON.stringify({
           week_start_date: weekStart,
           action: 'extract',
+          ai_config: aiConfig,
         }),
       });
-      
+
       const result = await response.json();
       if (result.success) {
         setExtractedPoints(result.data.points);
@@ -106,12 +120,12 @@ export default function WeeklyPage() {
         // 默认全选前3个重点
         setSelectedPoints(new Set([0, 1, 2]));
       } else {
-        alert(result.error);
+        toast.error(result.error);
         setStep('idle');
       }
     } catch (err) {
       console.error('提取重点失败:', err);
-      alert('提取重点失败，请重试');
+      toast.error('提取重点失败，请重试');
       setStep('idle');
     }
   };
@@ -119,13 +133,20 @@ export default function WeeklyPage() {
   // Step 2: 根据选择生成周报
   const handleGenerateWeekly = async () => {
     if (selectedPoints.size === 0) {
-      alert('请至少选择一个重点');
+      toast.error('请至少选择一个重点');
+      return;
+    }
+
+    const aiConfig = loadAiConfig();
+    if (!aiConfig) {
+      setSettingsOpen(true);
+      toast.error('请先配置 AI 模型');
       return;
     }
 
     setStep('generating');
     const points = extractedPoints.filter((_, i) => selectedPoints.has(i));
-    
+
     try {
       const response = await fetch('/api/weekly-reports/generate', {
         method: 'POST',
@@ -134,20 +155,21 @@ export default function WeeklyPage() {
           week_start_date: weekStartDate,
           action: 'generate',
           selected_points: points,
+          ai_config: aiConfig,
         }),
       });
-      
+
       const result = await response.json();
       if (result.success) {
         await fetchData();
         resetGenerateFlow();
       } else {
-        alert(result.error);
+        toast.error(result.error);
         setStep('selecting');
       }
     } catch (err) {
       console.error('生成周报失败:', err);
-      alert('生成周报失败，请重试');
+      toast.error('生成周报失败，请重试');
       setStep('selecting');
     }
   };
@@ -181,11 +203,11 @@ export default function WeeklyPage() {
       if (result.success) {
         await fetchData();
       } else {
-        alert(result.error);
+        toast.error(result.error);
       }
     } catch (err) {
       console.error('删除失败:', err);
-      alert('删除失败，请重试');
+      toast.error('删除失败，请重试');
     }
   };
 
@@ -230,6 +252,14 @@ export default function WeeklyPage() {
               <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">AI 智能汇总本周重点</p>
             </div>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSettingsOpen(true)}
+            className="shrink-0"
+          >
+            <SettingsIcon className="w-5 h-5" />
+          </Button>
         </div>
       </header>
 
@@ -374,7 +404,7 @@ export default function WeeklyPage() {
             <h2 className="text-sm sm:text-base font-semibold flex items-center gap-2">
               <SparklesIcon className="w-4 h-4 text-muted-foreground" />
               周报历史
-            </div>
+            </h2>
             <p className="text-xs sm:text-sm text-muted-foreground">{weeklyReports.length} 篇</p>
           </div>
 
@@ -524,6 +554,8 @@ export default function WeeklyPage() {
           })()}
         </section>
       </main>
+
+      <AiSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

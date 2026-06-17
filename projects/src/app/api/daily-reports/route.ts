@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-
-interface DailyReport {
-  id: number;
-  date: string;
-  title: string;
-  content: string;
-  mood?: string;
-  tags?: string[];
-  is_published: boolean;
-  created_at: string;
-  updated_at?: string;
-}
+import { getDb } from '@/storage/database/mysql-client';
+import { dailyReports } from '@/storage/database/shared/schema';
+import { eq, and, gte, lte, desc, sql } from 'drizzle-orm';
 
 // GET - 获取日报列表或单个日报
 export async function GET(request: NextRequest) {
-  const client = getSupabaseClient();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[daily-reports GET] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const date = searchParams.get('date');
@@ -24,43 +24,23 @@ export async function GET(request: NextRequest) {
 
   try {
     if (id) {
-      // 获取单个日报
-      const { data, error } = await client
-        .from('daily_reports')
-        .select('*')
-        .eq('id', parseInt(id))
-        .maybeSingle();
-
-      if (error) throw new Error(`获取日报失败: ${error.message}`);
-      return NextResponse.json({ success: true, data });
+      const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
+      return NextResponse.json({ success: true, data: data[0] || null });
     }
 
     if (date) {
-      // 根据日期获取日报
-      const { data, error } = await client
-        .from('daily_reports')
-        .select('*')
-        .eq('date', date)
-        .maybeSingle();
-
-      if (error) throw new Error(`获取日报失败: ${error.message}`);
-      return NextResponse.json({ success: true, data });
+      const data = await db.select().from(dailyReports).where(sql`${dailyReports.date} = ${date}`).limit(1);
+      return NextResponse.json({ success: true, data: data[0] || null });
     }
 
-    // 获取日报列表
-    let query = client
-      .from('daily_reports')
-      .select('*')
-      .order('date', { ascending: false });
-
+    const conditions = [];
     if (startDate && endDate) {
-      query = query.gte('date', startDate).lte('date', endDate);
+      conditions.push(sql`${dailyReports.date} >= ${startDate}`, sql`${dailyReports.date} <= ${endDate}`);
     }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const { data, error } = await query.limit(100);
-
-    if (error) throw new Error(`获取日报列表失败: ${error.message}`);
-    return NextResponse.json({ success: true, data: data as DailyReport[] });
+    const data = await db.select().from(dailyReports).where(whereClause).orderBy(desc(dailyReports.date)).limit(100);
+    return NextResponse.json({ success: true, data });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
@@ -69,8 +49,17 @@ export async function GET(request: NextRequest) {
 
 // POST - 创建日报
 export async function POST(request: NextRequest) {
-  const client = getSupabaseClient();
-  
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[daily-reports POST] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
   try {
     const body = await request.json();
     const { date, title, content, mood, tags } = body;
@@ -82,43 +71,59 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data, error } = await client
-      .from('daily_reports')
-      .insert({
-        date,
-        title,
-        content,
-        mood: mood || null,
-        tags: tags || null,
-        is_published: true,
-      })
-      .select()
-      .single();
+    const result = await db.insert(dailyReports).values({
+      date,
+      title,
+      content,
+      mood: mood || null,
+      tags: tags || null,
+      is_published: true,
+    });
 
-    if (error) {
-      if (error.code === '23505') {
-        return NextResponse.json(
-          { success: false, error: '该日期已有日报，请使用更新功能' },
-          { status: 400 }
-        );
-      }
-      throw new Error(`创建日报失败: ${error.message}`);
-    }
-
-    return NextResponse.json({ success: true, data: data as DailyReport });
+    const data = await db.select().from(dailyReports).where(eq(dailyReports.id, result[0].insertId)).limit(1);
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
+    console.error('[daily-reports POST] 创建日报失败:', errorMessage);
+
+    if (errorMessage.includes('Duplicate entry')) {
+      return NextResponse.json(
+        { success: false, error: '该日期已有日报，请使用更新功能' },
+        { status: 400 }
+      );
+    }
+    if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('connect')) {
+      return NextResponse.json(
+        { success: false, error: '数据库连接失败，请确认 MySQL 服务已启动' },
+        { status: 500 }
+      );
+    }
+    if (errorMessage.includes("Table") && errorMessage.includes("doesn't exist")) {
+      return NextResponse.json(
+        { success: false, error: '数据表不存在，请先执行数据库初始化脚本' },
+        { status: 500 }
+      );
+    }
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
   }
 }
 
 // PUT - 更新日报
 export async function PUT(request: NextRequest) {
-  const client = getSupabaseClient();
-  
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[daily-reports PUT] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
   try {
     const body = await request.json();
-    const { id, date, title, content, mood, tags } = body;
+    const { id, title, content, mood, tags } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -128,7 +133,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
     };
 
     if (title) updateData.title = title;
@@ -136,16 +141,10 @@ export async function PUT(request: NextRequest) {
     if (mood) updateData.mood = mood;
     if (tags) updateData.tags = tags;
 
-    const { data, error } = await client
-      .from('daily_reports')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
+    await db.update(dailyReports).set(updateData).where(eq(dailyReports.id, id));
+    const data = await db.select().from(dailyReports).where(eq(dailyReports.id, id)).limit(1);
 
-    if (error) throw new Error(`更新日报失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data: data as DailyReport });
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
@@ -154,7 +153,17 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - 删除日报
 export async function DELETE(request: NextRequest) {
-  const client = getSupabaseClient();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[daily-reports DELETE] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 
@@ -166,15 +175,10 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const { data, error } = await client
-      .from('daily_reports')
-      .delete()
-      .eq('id', parseInt(id))
-      .select();
+    const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
+    await db.delete(dailyReports).where(eq(dailyReports.id, parseInt(id)));
 
-    if (error) throw new Error(`删除日报失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });

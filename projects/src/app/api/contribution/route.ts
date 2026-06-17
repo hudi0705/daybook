@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getDb } from '@/storage/database/mysql-client';
+import { dailyReports } from '@/storage/database/shared/schema';
+import { asc, sql } from 'drizzle-orm';
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
+    const db = getDb();
     const { searchParams } = new URL(request.url);
     const year = searchParams.get('year') || new Date().getFullYear().toString();
     const viewMode = searchParams.get('viewMode') || 'year';
 
-    // 计算日期范围
     let startDate: Date;
     let endDate: Date;
     const now = new Date();
@@ -21,29 +22,24 @@ export async function GET(request: NextRequest) {
       startDate = new Date(parseInt(year), quarterMonth, 1);
       endDate = new Date(parseInt(year), quarterMonth + 3, 0);
     } else {
-      // Year view - 从一年前到现在
       startDate = new Date(parseInt(year) - 1, now.getMonth(), now.getDate());
       endDate = new Date(parseInt(year), now.getMonth(), now.getDate());
     }
 
-    // 查询日报数据
-    const { data: reports, error } = await supabase
-      .from('daily_reports')
-      .select('date, title, content')
-      .gte('date', startDate.toISOString().split('T')[0])
-      .lte('date', endDate.toISOString().split('T')[0])
-      .order('date', { ascending: true });
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
 
-    if (error) {
-      console.error('Error fetching daily reports:', error);
-      return NextResponse.json(
-        { success: false, error: '获取日报数据失败' },
-        { status: 500 }
-      );
-    }
+    const reports = await db
+      .select({
+        date: dailyReports.date,
+        title: dailyReports.title,
+        content: dailyReports.content,
+      })
+      .from(dailyReports)
+      .where(sql`${dailyReports.date} >= ${startStr} AND ${dailyReports.date} <= ${endStr}`)
+      .orderBy(asc(dailyReports.date));
 
-    // 构建热力图数据
-    const contributionData = (reports || []).map((report: { date: string; title: string; content: string }) => ({
+    const contributionData = reports.map((report) => ({
       date: report.date,
       count: 1,
       summary: report.title,
@@ -54,8 +50,8 @@ export async function GET(request: NextRequest) {
       data: contributionData,
       stats: {
         total: reports.length,
-        start_date: startDate.toISOString().split('T')[0],
-        end_date: endDate.toISOString().split('T')[0],
+        start_date: startStr,
+        end_date: endStr,
       },
     });
   } catch (error) {

@@ -1,25 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getDb } from '@/storage/database/mysql-client';
+import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
+import { eq, and, asc, sql } from 'drizzle-orm';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
+import { callOpenAICompatible, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
 
-interface DailyReport {
-  id: number;
-  date: string;
-  title: string;
-  content: string;
-  mood?: string;
-  tags?: string[];
+// 统一的 LLM 调用函数：优先使用用户自定义配置，回退到 coze SDK
+async function invokeLLM(
+  messages: LLMMessage[],
+  options: { model: string; temperature: number },
+  requestHeaders: Headers,
+  aiConfig?: AiProviderConfig
+) {
+  if (aiConfig) {
+    return callOpenAICompatible(aiConfig, messages, options);
+  }
+  const customHeaders = HeaderUtils.extractForwardHeaders(requestHeaders);
+  const llmClient = new LLMClient(new Config(), customHeaders);
+  return llmClient.invoke(messages, options);
 }
 
 // POST - 提取周报重点信息
 export async function POST(request: NextRequest) {
-  const supabaseClient = getSupabaseClient();
-  const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
-  const llmClient = new LLMClient(new Config(), customHeaders);
+  const db = getDb();
 
   try {
     const body = await request.json();
-    const { week_start_date, action, selected_points } = body;
+    const { week_start_date, action, selected_points, ai_config } = body;
 
     if (!week_start_date) {
       return NextResponse.json(
@@ -28,30 +35,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 计算周结束日期（周日）
     const startDate = new Date(week_start_date);
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + 6);
     const week_end_date = endDate.toISOString().split('T')[0];
 
-    // 获取本周的日报
-    const { data: dailyReports, error } = await supabaseClient
-      .from('daily_reports')
-      .select('id, date, title, content, mood, tags')
-      .gte('date', week_start_date)
-      .lte('date', week_end_date)
-      .order('date', { ascending: true });
+    const reports = await db.select({
+      id: dailyReports.id,
+      date: dailyReports.date,
+      title: dailyReports.title,
+      content: dailyReports.content,
+      mood: dailyReports.mood,
+      tags: dailyReports.tags,
+    })
+      .from(dailyReports)
+      .where(and(sql`${dailyReports.date} >= ${week_start_date}`, sql`${dailyReports.date} <= ${week_end_date}`))
+      .orderBy(asc(dailyReports.date));
 
-    if (error) throw new Error(`获取日报失败: ${error.message}`);
-
-    if (!dailyReports || dailyReports.length === 0) {
+    if (!reports || reports.length === 0) {
       return NextResponse.json(
         { success: false, error: '该周没有日报数据，无法生成周报' },
         { status: 400 }
       );
     }
 
-    const reportsText = (dailyReports as DailyReport[])
+    const reportsText = reports
       .map((r) => `${r.date} (${r.mood || '无心情'}): ${r.title}\n${r.content}`)
       .join('\n\n');
 
@@ -74,12 +82,8 @@ ${reportsText}
         { role: 'user', content: extractPrompt },
       ];
 
-      const response = await llmClient.invoke(messages, {
-        model: 'doubao-seed-2-0-lite-260215',
-        temperature: 0.5,
-      });
+      const response = await invokeLLM(messages, { model: ai_config?.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.5 }, request.headers, ai_config);
 
-      // 解析提取的重点信息
       const points = response.content
         .split('\n')
         .filter(line => line.match(/^\d+\./))
@@ -91,7 +95,7 @@ ${reportsText}
           points,
           week_start_date,
           week_end_date,
-          daily_report_count: dailyReports.length,
+          daily_report_count: reports.length,
         },
       });
     }
@@ -130,50 +134,30 @@ ${reportsText}
         { role: 'user', content: generatePrompt },
       ];
 
-      const response = await llmClient.invoke(messages, {
-        model: 'doubao-seed-2-0-lite-260215',
-        temperature: 0.7,
-      });
+      const response = await invokeLLM(messages, { model: ai_config?.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.7 }, request.headers, ai_config);
 
       const summary = response.content;
 
-      // 存储周报
       const reportData = {
-        week_start_date,
-        week_end_date,
+        week_start_date: new Date(week_start_date),
+        week_end_date: new Date(week_end_date),
         summary,
         is_published: true,
       };
 
-      // 检查是否已有周报
-      const { data: existingReport } = await supabaseClient
-        .from('weekly_reports')
-        .select('*')
-        .eq('week_start_date', week_start_date)
-        .maybeSingle();
+      const existing = await db.select().from(weeklyReports)
+        .where(eq(weeklyReports.week_start_date, week_start_date)).limit(1);
 
-      if (existingReport) {
-        const { data, error: updateError } = await supabaseClient
-          .from('weekly_reports')
-          .update({
-            ...reportData,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existingReport.id)
-          .select()
-          .single();
-
-        if (updateError) throw new Error(`更新周报失败: ${updateError.message}`);
-        return NextResponse.json({ success: true, data });
+      if (existing.length > 0) {
+        await db.update(weeklyReports)
+          .set({ ...reportData, updated_at: new Date() })
+          .where(eq(weeklyReports.id, existing[0].id));
+        const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, existing[0].id)).limit(1);
+        return NextResponse.json({ success: true, data: data[0] });
       } else {
-        const { data, error: insertError } = await supabaseClient
-          .from('weekly_reports')
-          .insert(reportData)
-          .select()
-          .single();
-
-        if (insertError) throw new Error(`创建周报失败: ${insertError.message}`);
-        return NextResponse.json({ success: true, data });
+        const result = await db.insert(weeklyReports).values(reportData);
+        const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, result[0].insertId)).limit(1);
+        return NextResponse.json({ success: true, data: data[0] });
       }
     }
 

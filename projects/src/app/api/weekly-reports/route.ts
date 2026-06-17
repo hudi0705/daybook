@@ -1,58 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getDb } from '@/storage/database/mysql-client';
+import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-
-interface WeeklyReport {
-  id: number;
-  week_start_date: string;
-  week_end_date: string;
-  summary: string;
-  is_published: boolean;
-  created_at: string;
-  updated_at?: string;
-}
-
-interface DailyReport {
-  id: number;
-  date: string;
-  title: string;
-  content: string;
-  mood?: string;
-  tags?: string[];
-}
+import { callOpenAICompatible, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
 
 // GET - 获取周报列表或单个周报
 export async function GET(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const startDate = searchParams.get('start_date');
 
   try {
     if (id) {
-      const { data, error } = await client
-        .from('weekly_reports')
-        .select('*')
-        .eq('id', parseInt(id))
-        .maybeSingle();
-
-      if (error) throw new Error(`获取周报失败: ${error.message}`);
-      return NextResponse.json({ success: true, data });
+      const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, parseInt(id))).limit(1);
+      return NextResponse.json({ success: true, data: data[0] || null });
     }
 
-    let query = client
-      .from('weekly_reports')
-      .select('*')
-      .order('week_start_date', { ascending: false });
-
+    const conditions = [];
     if (startDate) {
-      query = query.eq('week_start_date', startDate);
+      conditions.push(sql`${weeklyReports.week_start_date} = ${startDate}`);
     }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const { data, error } = await query.limit(50);
-
-    if (error) throw new Error(`获取周报列表失败: ${error.message}`);
-    return NextResponse.json({ success: true, data: data as WeeklyReport[] });
+    const data = await db.select().from(weeklyReports).where(whereClause).orderBy(desc(weeklyReports.week_start_date)).limit(50);
+    return NextResponse.json({ success: true, data });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
@@ -61,13 +34,11 @@ export async function GET(request: NextRequest) {
 
 // POST - 生成周报
 export async function POST(request: NextRequest) {
-  const supabaseClient = getSupabaseClient();
-  const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
-  const llmClient = new LLMClient(new Config(), customHeaders);
+  const db = getDb();
 
   try {
     const body = await request.json();
-    const { week_start_date, force_regenerate } = body;
+    const { week_start_date, force_regenerate, ai_config } = body;
 
     if (!week_start_date) {
       return NextResponse.json(
@@ -76,42 +47,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 计算周结束日期（周日）
     const startDate = new Date(week_start_date);
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + 6);
     const week_end_date = endDate.toISOString().split('T')[0];
 
-    // 检查是否已存在周报
-    const { data: existingReport } = await supabaseClient
-      .from('weekly_reports')
-      .select('*')
-      .eq('week_start_date', week_start_date)
-      .maybeSingle();
+    const existing = await db.select().from(weeklyReports)
+      .where(sql`${weeklyReports.week_start_date} = ${week_start_date}`).limit(1);
 
-    if (existingReport && !force_regenerate) {
-      return NextResponse.json({ success: true, data: existingReport as WeeklyReport });
+    if (existing.length > 0 && !force_regenerate) {
+      return NextResponse.json({ success: true, data: existing[0] });
     }
 
-    // 获取本周的日报
-    const { data: dailyReports, error } = await supabaseClient
-      .from('daily_reports')
-      .select('id, date, title, content, mood, tags')
-      .gte('date', week_start_date)
-      .lte('date', week_end_date)
-      .order('date', { ascending: true });
+    const reports = await db.select({
+      id: dailyReports.id,
+      date: dailyReports.date,
+      title: dailyReports.title,
+      content: dailyReports.content,
+      mood: dailyReports.mood,
+      tags: dailyReports.tags,
+    })
+      .from(dailyReports)
+      .where(sql`${dailyReports.date} >= ${week_start_date} AND ${dailyReports.date} <= ${week_end_date}`)
+      .orderBy(dailyReports.date);
 
-    if (error) throw new Error(`获取日报失败: ${error.message}`);
-
-    if (!dailyReports || dailyReports.length === 0) {
+    if (!reports || reports.length === 0) {
       return NextResponse.json(
         { success: false, error: '该周没有日报数据，无法生成周报' },
         { status: 400 }
       );
     }
 
-    // 使用 LLM 生成周报
-    const reportsText = (dailyReports as DailyReport[])
+    const reportsText = reports
       .map((r) => `${r.date} (${r.mood || '无心情记录'}): ${r.title}\n${r.content}`)
       .join('\n\n');
 
@@ -131,50 +98,34 @@ ${reportsText}
 - 语言要自然流畅，不要过于正式
 - 如果某天没有心情记录，就忽略该部分`;
 
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    const messages: LLMMessage[] = [
       { role: 'system', content: '你是一个专业的周报生成助手，擅长提炼和总结日常记录。' },
       { role: 'user', content: prompt },
     ];
 
-    const response = await llmClient.invoke(messages, {
-      model: 'doubao-seed-2-0-lite-260215',
-      temperature: 0.7,
-    });
+    const response = ai_config
+      ? await callOpenAICompatible(ai_config, messages, { model: ai_config.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.7 })
+      : await new LLMClient(new Config(), HeaderUtils.extractForwardHeaders(request.headers)).invoke(messages, { model: 'doubao-seed-2-0-lite-260215', temperature: 0.7 });
 
     const summary = response.content;
 
-    // 存储周报
     const reportData = {
-      week_start_date,
-      week_end_date,
+      week_start_date: new Date(week_start_date),
+      week_end_date: new Date(week_end_date),
       summary,
       is_published: true,
     };
 
-    if (existingReport) {
-      // 更新已有周报
-      const { data, error: updateError } = await supabaseClient
-        .from('weekly_reports')
-        .update({
-          ...reportData,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingReport.id)
-        .select()
-        .single();
-
-      if (updateError) throw new Error(`更新周报失败: ${updateError.message}`);
-      return NextResponse.json({ success: true, data: data as WeeklyReport });
+    if (existing.length > 0) {
+      await db.update(weeklyReports)
+        .set({ ...reportData, updated_at: new Date() })
+        .where(eq(weeklyReports.id, existing[0].id));
+      const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, existing[0].id)).limit(1);
+      return NextResponse.json({ success: true, data: data[0] });
     } else {
-      // 创建新周报
-      const { data, error: insertError } = await supabaseClient
-        .from('weekly_reports')
-        .insert(reportData)
-        .select()
-        .single();
-
-      if (insertError) throw new Error(`创建周报失败: ${insertError.message}`);
-      return NextResponse.json({ success: true, data: data as WeeklyReport });
+      const result = await db.insert(weeklyReports).values(reportData);
+      const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, result[0].insertId)).limit(1);
+      return NextResponse.json({ success: true, data: data[0] });
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
@@ -184,7 +135,7 @@ ${reportsText}
 
 // DELETE - 删除周报
 export async function DELETE(request: NextRequest) {
-  const client = getSupabaseClient();
+  const db = getDb();
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 
@@ -196,15 +147,10 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const { data, error } = await client
-      .from('weekly_reports')
-      .delete()
-      .eq('id', parseInt(id))
-      .select();
+    const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, parseInt(id))).limit(1);
+    await db.delete(weeklyReports).where(eq(weeklyReports.id, parseInt(id)));
 
-    if (error) throw new Error(`删除周报失败: ${error.message}`);
-
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
