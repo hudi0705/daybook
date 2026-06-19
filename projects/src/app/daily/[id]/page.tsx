@@ -2,18 +2,19 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
 import { Calendar } from '@/components/ui/calendar';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowLeftIcon, EditIcon, TrashIcon, CalendarIcon, FileTextIcon } from 'lucide-react';
+import {
+  ArrowLeftIcon,
+  EditIcon,
+  TrashIcon,
+  ClockIcon,
+} from 'lucide-react';
 
 interface DailyReport {
   id: number;
@@ -26,24 +27,45 @@ interface DailyReport {
   updated_at?: string;
 }
 
-const moodOptions = ['开心', '平静', '疲惫', '焦虑', '充实', '迷茫', '兴奋', '失落'];
+const moodEmojiMap: Record<string, string> = {
+  '开心': '😊',
+  '平静': '😌',
+  '疲惫': '😩',
+  '焦虑': '😰',
+  '充实': '💪',
+  '迷茫': '🤔',
+  '兴奋': '🔥',
+  '失落': '😔',
+};
+
+const moodOptions = [
+  { emoji: '😊', label: '开心' },
+  { emoji: '😌', label: '平静' },
+  { emoji: '😩', label: '疲惫' },
+  { emoji: '😰', label: '焦虑' },
+  { emoji: '💪', label: '充实' },
+  { emoji: '🤔', label: '迷茫' },
+  { emoji: '🔥', label: '兴奋' },
+  { emoji: '😔', label: '失落' },
+];
 
 export default function DailyReportDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
-  
+
   const [report, setReport] = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  
+
   // 编辑表单
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [mood, setMood] = useState('');
-  const [tags, setTags] = useState('');
+  const [editTags, setEditTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
 
   useEffect(() => {
     fetchReport();
@@ -56,7 +78,6 @@ export default function DailyReportDetailPage() {
       if (result.success) {
         setReport(result.data);
       } else {
-        alert(result.error);
         router.push('/');
       }
     } catch (err) {
@@ -73,9 +94,22 @@ export default function DailyReportDetailPage() {
       setTitle(report.title);
       setContent(report.content);
       setMood(report.mood || '');
-      setTags((report.tags || []).join(', '));
+      setEditTags(report.tags || []);
+      setTagInput('');
       setEditDialogOpen(true);
     }
+  };
+
+  const addEditTag = (tag: string) => {
+    const trimmed = tag.trim();
+    if (trimmed && !editTags.includes(trimmed)) {
+      setEditTags([...editTags, trimmed]);
+    }
+    setTagInput('');
+  };
+
+  const removeEditTag = (tagToRemove: string) => {
+    setEditTags(editTags.filter(t => t !== tagToRemove));
   };
 
   const handleUpdate = async () => {
@@ -83,8 +117,6 @@ export default function DailyReportDetailPage() {
 
     setSaving(true);
     try {
-      const tagArray = tags.split(',').map(t => t.trim()).filter(t => t);
-      
       const response = await fetch('/api/daily-reports', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -93,10 +125,10 @@ export default function DailyReportDetailPage() {
           title,
           content,
           mood,
-          tags: tagArray,
+          tags: editTags,
         }),
       });
-      
+
       const result = await response.json();
       if (result.success) {
         setReport(result.data);
@@ -134,13 +166,33 @@ export default function DailyReportDetailPage() {
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
+    return {
+      full: `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`,
+      weekday: weekdays[date.getDay()],
+      day: date.getDate(),
+      month: `${date.getMonth() + 1}月`,
+      year: `${date.getFullYear()}`,
+    };
+  };
+
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (title.trim() && content.trim() && !saving) {
+        handleUpdate();
+      }
+    }
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <Spinner className="w-8 h-8" />
+        <Spinner className="w-6 h-6 text-primary" />
       </div>
     );
   }
@@ -148,184 +200,288 @@ export default function DailyReportDetailPage() {
   if (!report) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-muted-foreground">日报不存在</p>
+        <div className="text-center">
+          <p className="text-sm text-muted-foreground mb-3">日报不存在</p>
+          <Button variant="ghost" size="sm" onClick={() => router.push('/')}>
+            返回首页
+          </Button>
+        </div>
       </div>
     );
   }
 
+  const dateInfo = formatDate(report.date);
+
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
-              <ArrowLeftIcon className="w-5 h-5" />
-            </Button>
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-              <FileTextIcon className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-foreground">{report.title}</h1>
-              <p className="text-sm text-muted-foreground flex items-center gap-2">
-                <CalendarIcon className="w-3 h-3" />
-                {formatDate(report.date)}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={openEditDialog} className="gap-2">
-              <EditIcon className="w-4 h-4" />
+      {/* ── Top bar ── */}
+      <header className="border-b border-border/60 bg-card/80 backdrop-blur-md sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-5 sm:px-8 py-3 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => router.push('/')}
+          >
+            <ArrowLeftIcon className="w-3.5 h-3.5" />
+            返回
+          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={openEditDialog}
+            >
+              <EditIcon className="w-3.5 h-3.5" />
               编辑
             </Button>
-            <Button variant="outline" size="sm" onClick={handleDelete} className="gap-2 text-destructive">
-              <TrashIcon className="w-4 h-4" />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+              onClick={handleDelete}
+            >
+              <TrashIcon className="w-3.5 h-3.5" />
               删除
             </Button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-6 py-8">
-        {/* 元信息 */}
-        <div className="flex items-center gap-3 mb-6">
-          {report.mood && (
-            <Badge variant="secondary" className="text-sm">
-              心情：{report.mood}
-            </Badge>
-          )}
-          {report.tags && report.tags.length > 0 && (
-            <div className="flex gap-2">
-              {report.tags.map((tag) => (
-                <Badge key={tag} variant="outline" className="text-xs">
-                  {tag}
-                </Badge>
-              ))}
+      {/* ── Hero: date + mood ── */}
+      <section className="relative bg-primary overflow-hidden">
+        {/* Grain texture */}
+        <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\'/%3E%3C/svg%3E")' }} />
+
+        <div className="relative max-w-3xl mx-auto px-5 sm:px-8 py-8 sm:py-10">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-white/60 text-xs font-medium tracking-wider uppercase mb-2">
+                {dateInfo.year}
+              </p>
+              <div className="flex items-baseline gap-2">
+                <span className="text-5xl sm:text-6xl font-black text-white leading-none tracking-tighter">
+                  {dateInfo.day}
+                </span>
+                <span className="text-lg sm:text-xl font-bold text-white/60 leading-none">
+                  {dateInfo.month}
+                </span>
+              </div>
+              <p className="text-sm text-white/40 mt-1.5">{dateInfo.weekday}</p>
             </div>
-          )}
+
+            {report.mood && (
+              <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-4 py-2.5 rounded-xl">
+                <span className="text-2xl">{moodEmojiMap[report.mood] || '📝'}</span>
+                <span className="text-sm font-medium text-white/80">{report.mood}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Main content ── */}
+      <main className="max-w-3xl mx-auto px-5 sm:px-8">
+        {/* Title */}
+        <div className="pt-8 pb-4">
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground tracking-tight leading-tight">
+            {report.title}
+          </h1>
         </div>
 
-        {/* Markdown 内容 */}
-        <Card className="overflow-hidden">
-          <CardContent className="p-8">
-            <div className="prose prose-sm max-w-none dark:prose-invert">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {report.content}
-              </ReactMarkdown>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Tags */}
+        {report.tags && report.tags.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap pb-6">
+            {report.tags.map((tag) => (
+              <span
+                key={tag}
+                className="text-xs font-medium text-accent/80 bg-accent/8 px-2.5 py-1 rounded-md"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
 
-        {/* 时间信息 */}
-        <div className="mt-6 text-sm text-muted-foreground">
-          <p>创建于 {new Date(report.created_at).toLocaleString()}</p>
-          {report.updated_at && (
-            <p>更新于 {new Date(report.updated_at).toLocaleString()}</p>
+        {/* Divider */}
+        <div className="border-t border-border/40" />
+
+        {/* Markdown content */}
+        <article className="py-8 prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/85 prose-p:leading-[1.8] prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:border prose-pre:border-border/30 prose-blockquote:border-l-primary/30 prose-blockquote:text-muted-foreground prose-a:text-primary prose-a:underline-offset-2 prose-hr:border-border/30 prose-li:text-foreground/85">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {report.content}
+          </ReactMarkdown>
+        </article>
+
+        {/* Footer meta */}
+        <div className="border-t border-border/30 py-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6 text-xs text-muted-foreground/60">
+          <span className="inline-flex items-center gap-1.5">
+            <ClockIcon className="w-3 h-3" />
+            创建于 {formatTime(report.created_at)}
+          </span>
+          {report.updated_at && report.updated_at !== report.created_at && (
+            <span className="inline-flex items-center gap-1.5">
+              <ClockIcon className="w-3 h-3" />
+              更新于 {formatTime(report.updated_at)}
+            </span>
           )}
         </div>
       </main>
 
-      {/* 编辑对话框 */}
+      {/* ── Edit dialog ── */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>编辑日报</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 mt-4">
+        <DialogContent className="max-w-[560px] max-h-[85vh] overflow-y-auto p-0">
+          {/* Dialog header: green surface */}
+          <div className="relative bg-primary px-6 pt-5 pb-6 overflow-hidden">
+            <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\'/%3E%3C/svg%3E")' }} />
+
+            <div className="relative flex items-end justify-between">
+              <div>
+                <DialogTitle className="text-white/70 text-xs font-medium tracking-wider uppercase mb-2">
+                  编辑日报
+                </DialogTitle>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-5xl font-black text-white leading-none tracking-tighter">
+                    {selectedDate?.getDate()}
+                  </span>
+                  <span className="text-lg font-bold text-white/60 leading-none">
+                    {selectedDate?.toLocaleDateString('zh-CN', { month: 'long' })}
+                  </span>
+                </div>
+                <p className="text-sm text-white/40 mt-1.5">
+                  {selectedDate?.toLocaleDateString('zh-CN', { weekday: 'long', year: 'numeric' })}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Dialog body */}
+          <div className="px-6 pt-6 pb-5 space-y-5" onKeyDown={handleKeyDown}>
             <div className="space-y-2">
-              <Label>日期</Label>
+              <p className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">日期</p>
               <Calendar
                 mode="single"
                 selected={selectedDate}
                 onSelect={setSelectedDate}
-                className="rounded-md border"
+                className="rounded-xl border border-border/40"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="title">标题</Label>
-              <Input
-                id="title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="今天做了什么..."
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="content">内容（支持 Markdown）</Label>
+
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="给今天起个标题..."
+              className="w-full text-xl font-bold text-foreground placeholder:text-muted-foreground/30 bg-transparent border-none outline-none focus:ring-0 tracking-tight"
+            />
+
+            <div>
               <Textarea
-                id="content"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="支持 Markdown 格式..."
-                rows={12}
+                placeholder="记录今天的工作、学习、生活..."
+                rows={10}
+                className="resize-none text-sm leading-[1.8] focus-visible:ring-primary/30 bg-muted/30 border-border/40"
               />
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-muted-foreground">
-                  支持 Markdown 格式，如列表、标题、代码块等
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs h-7"
-                  onClick={() => {
-                    if (selectedDate) {
-                      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-                      const dateStr = `${selectedDate.getFullYear()}-${selectedDate.getMonth() + 1}-${selectedDate.getDate()}-${weekdays[selectedDate.getDay()]}`;
-                      const nextDay = new Date(selectedDate);
-                      nextDay.setDate(selectedDate.getDate() + 1);
-                      const nextDateStr = `${nextDay.getFullYear()}-${nextDay.getMonth() + 1}-${nextDay.getDate()}-${weekdays[nextDay.getDay()]}`;
-                      setContent(`今日工作总结（${dateStr}）
-1. 
-2. 
-3. 
-
-明日工作安排（${nextDateStr}）
-1. 
-2. 
-3. `);
-                    }
-                  }}
-                >
-                  使用模板
-                </Button>
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-[11px] text-muted-foreground/60">支持 Markdown</p>
+                <p className="text-[11px] text-muted-foreground/60 tabular-nums">{content.length} 字</p>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>心情</Label>
-              <div className="flex gap-2 flex-wrap">
+
+            {/* Mood */}
+            <div>
+              <p className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider mb-3">心情</p>
+              <div className="flex flex-wrap gap-2">
                 {moodOptions.map((m) => (
-                  <Badge
-                    key={m}
-                    variant={mood === m ? 'default' : 'outline'}
-                    className="cursor-pointer hover:bg-primary/10"
-                    onClick={() => setMood(m)}
+                  <button
+                    key={m.label}
+                    type="button"
+                    onClick={() => setMood(mood === m.label ? '' : m.label)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-all duration-150 ${
+                      mood === m.label
+                        ? 'bg-primary/10 border border-primary/25 text-primary font-medium'
+                        : 'bg-muted/40 border border-transparent text-muted-foreground hover:bg-muted/70'
+                    }`}
                   >
-                    {m}
-                  </Badge>
+                    <span className="text-base">{m.emoji}</span>
+                    {m.label}
+                  </button>
                 ))}
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="tags">标签（逗号分隔）</Label>
-              <Input
-                id="tags"
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-                placeholder="工作, 学习, 运动..."
-              />
+
+            {/* Tags */}
+            <div>
+              <p className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider mb-3">标签</p>
+              <div className="flex flex-wrap gap-1.5 items-center min-h-[36px] rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10 transition-all duration-150">
+                {editTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-accent/10 text-accent text-xs font-medium"
+                  >
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeEditTag(tag)}
+                      className="hover:text-accent/70 transition-colors"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <input
+                  value={tagInput}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val.endsWith(',')) {
+                      addEditTag(val.slice(0, -1));
+                    } else {
+                      setTagInput(val);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      addEditTag(tagInput);
+                    }
+                    if (e.key === 'Backspace' && tagInput === '' && editTags.length > 0) {
+                      removeEditTag(editTags[editTags.length - 1]);
+                    }
+                  }}
+                  placeholder={editTags.length === 0 ? "输入标签，按回车添加..." : "继续添加..."}
+                  className="flex-1 min-w-[120px] text-xs bg-transparent border-none outline-none placeholder:text-muted-foreground/40"
+                />
+              </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
-                取消
-              </Button>
-              <Button
+          </div>
+
+          {/* Dialog footer */}
+          <div className="px-6 py-5 border-t border-border/40 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setEditDialogOpen(false)}
+              className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+            >
+              取消
+            </button>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-muted-foreground/50 hidden sm:inline-flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-muted/60 border border-border/40 text-[10px] font-mono">Ctrl</kbd>
+                <span>+</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-muted/60 border border-border/40 text-[10px] font-mono">Enter</kbd>
+              </span>
+              <button
+                type="button"
                 onClick={handleUpdate}
                 disabled={!title.trim() || !content.trim() || saving}
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 shadow-sm"
               >
-                {saving ? <Spinner className="w-4 h-4" /> : '保存'}
-              </Button>
-            </DialogFooter>
+                {saving ? <Spinner className="w-3.5 h-3.5" /> : null}
+                {saving ? '保存中...' : '保存'}
+              </button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
