@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -40,6 +40,14 @@ interface DailyReport {
   content: string;
   mood?: string;
   tags?: string[];
+  created_at: string;
+}
+
+interface WeeklyReport {
+  id: number;
+  week_start_date: string;
+  week_end_date: string;
+  summary: string;
   created_at: string;
 }
 
@@ -152,6 +160,7 @@ export default function HomePage() {
   const [editingReport, setEditingReport] = useState<DailyReport | null>(null);
   const [contributionData, setContributionData] = useState<ContributionDay[]>([]);
   const [contributionLoading, setContributionLoading] = useState(true);
+  const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
   const [viewMode, setViewMode] = useState<'week' | 'grid'>('week');
 
   const [title, setTitle] = useState('');
@@ -176,6 +185,7 @@ export default function HomePage() {
   useEffect(() => {
     fetchReports();
     fetchContribution();
+    fetchWeeklyReports();
   }, []);
 
   // Lock body scroll when dialog is open
@@ -217,6 +227,28 @@ export default function HomePage() {
       setContributionLoading(false);
     }
   };
+
+  const fetchWeeklyReports = async () => {
+    try {
+      const response = await fetch('/api/weekly-reports');
+      const result = await response.json();
+      if (result.success) {
+        setWeeklyReports(result.data || []);
+      }
+    } catch (err) {
+      console.error('获取周报失败:', err);
+    }
+  };
+
+  // 周报按 week_start_date 索引（标准化为 YYYY-MM-DD）
+  const weeklyReportMap = useMemo(() => {
+    const map = new Map<string, WeeklyReport>();
+    weeklyReports.forEach(wr => {
+      const key = wr.week_start_date.slice(0, 10);
+      map.set(key, wr);
+    });
+    return map;
+  }, [weeklyReports]);
 
   const handleSubmit = async () => {
     if (!selectedDate || !title.trim() || !content.trim()) return;
@@ -748,6 +780,36 @@ export default function HomePage() {
                       {/* Cards grid */}
                       <CollapsibleContent>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4 pl-[34px]">
+                          {/* 周报卡片 */}
+                          {weeklyReportMap.has(monday) && (() => {
+                            const wr = weeklyReportMap.get(monday)!;
+                            return (
+                              <Card
+                                key={`weekly-${wr.id}`}
+                                className="col-span-1 sm:col-span-2 lg:col-span-3 cursor-pointer border-accent/30 bg-accent/[0.04] hover:border-accent/50 hover:shadow-md hover:shadow-accent/[0.06] transition-all duration-200 group/wr"
+                                onClick={() => router.push(`/weekly/${wr.id}`)}
+                              >
+                                <CardContent className="p-4">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-[11px] font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                      <BarChart3Icon className="w-3 h-3" />
+                                      周报
+                                    </span>
+                                    <span className="text-[11px] text-muted-foreground">
+                                      {formatDate(wr.week_start_date)} 至 {formatDate(wr.week_end_date)}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed whitespace-pre-wrap">
+                                    {wr.summary.length > 200 ? wr.summary.slice(0, 200) + '...' : wr.summary}
+                                  </p>
+                                  <div className="flex items-center gap-1 mt-2 pt-2 border-t border-accent/10 opacity-0 group-hover/wr:opacity-100 transition-opacity duration-150">
+                                    <span className="text-[11px] text-accent/70">点击查看完整周报 →</span>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })()}
+
                           {weekReports.map((report) => (
                             <Card
                               key={report.id}
@@ -814,6 +876,30 @@ export default function HomePage() {
           ) : (
             /* Grid view */
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* 周报卡片（按时间倒序） */}
+              {weeklyReports.map((wr) => (
+                <Card
+                  key={`weekly-${wr.id}`}
+                  className="cursor-pointer border-accent/30 bg-accent/[0.04] hover:border-accent/50 hover:shadow-md hover:shadow-accent/[0.06] transition-all duration-200 group/wr"
+                  onClick={() => router.push(`/weekly/${wr.id}`)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[11px] font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <BarChart3Icon className="w-3 h-3" />
+                        周报
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {formatDate(wr.week_start_date)} 至 {formatDate(wr.week_end_date)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed whitespace-pre-wrap">
+                      {wr.summary.length > 200 ? wr.summary.slice(0, 200) + '...' : wr.summary}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+
               {reports.map((report) => (
                 <Card
                   key={report.id}
