@@ -20,13 +20,11 @@ type ViewMode = 'month' | 'quarter' | 'year';
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 const MONTH_LABELS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
 
+const LABEL_WIDTH = 32; // 星期标签宽度
+const GAP = 3; // 单元格间距
+
 /**
  * oklch gradient from warm empty to rich saturated plant-green.
- * Inspired by GitHub's contribution graph with our "晨间咖啡馆" palette:
- *   Level 0: Barely tinted warm neutral (empty state)
- *   Level 1-4: Progressive saturation with subtle lightness shift
- *
- * Key improvement: Smoother perceptual gradient using oklch
  */
 const CELL_COLORS = [
   {
@@ -95,6 +93,7 @@ const ContributionCell = React.memo(function ContributionCell({
   onLeave,
   onClick,
   animationDelay,
+  cellSize,
 }: {
   dayData: ContributionDay;
   level: number;
@@ -104,6 +103,7 @@ const ContributionCell = React.memo(function ContributionCell({
   onLeave: () => void;
   onClick: (dayData: ContributionDay) => void;
   animationDelay: number;
+  cellSize: number;
 }) {
   const cellRef = useRef<HTMLDivElement>(null);
   const dateLabel = useMemo(() => formatDateDisplay(dayData.date), [dayData.date]);
@@ -112,7 +112,7 @@ const ContributionCell = React.memo(function ContributionCell({
     : `${dateLabel}，无日报`;
 
   const colors = CELL_COLORS[level];
-  const hasActivity = level > 0;
+  const radius = Math.max(2, Math.round(cellSize * 0.2));
 
   return (
     <div
@@ -125,6 +125,8 @@ const ContributionCell = React.memo(function ContributionCell({
       data-clickable={isClickable}
       data-hovered={isHovered}
       style={{
+        '--cell-size': `${cellSize}px`,
+        '--cell-radius': `${radius}px`,
         '--cell-bg': colors.bg,
         '--cell-border': colors.border,
         '--cell-glow': colors.glow,
@@ -150,11 +152,31 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('year');
   const [isGridVisible, setIsGridVisible] = useState(true);
+  const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const hoveredCellRef = useRef<HTMLElement | null>(null);
 
   const baseDate = startDate || new Date();
+
+  // 监听容器宽度变化
+  useEffect(() => {
+    const updateWidth = () => {
+      if (gridContainerRef.current) {
+        setContainerWidth(gridContainerRef.current.clientWidth);
+      }
+    };
+
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    if (gridContainerRef.current) {
+      observer.observe(gridContainerRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, []);
 
   const viewConfig = useMemo(() => {
     const end = new Date(baseDate);
@@ -230,6 +252,19 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
     return grid;
   }, [data, viewConfig]);
 
+  // 动态计算单元格大小，使网格占满容器
+  const cellSize = useMemo(() => {
+    if (containerWidth === 0 || gridData.length === 0) return 14;
+
+    const availableWidth = containerWidth - LABEL_WIDTH;
+    const weeks = gridData.length;
+    const totalGaps = (weeks - 1) * GAP;
+    const calculatedSize = Math.floor((availableWidth - totalGaps) / weeks);
+
+    // 限制在合理范围内：最小 10px，最大 20px
+    return Math.max(10, Math.min(20, calculatedSize));
+  }, [containerWidth, gridData.length]);
+
   const monthLabels = useMemo(() => {
     const labels: { month: number; week: number; label: string }[] = [];
     const { start } = viewConfig;
@@ -277,13 +312,11 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
     let x = cellCenterX - tooltipWidth / 2;
     let y = cellTop - tooltipHeight - 8;
 
-    // Keep tooltip within container bounds
     if (x + tooltipWidth > containerRect.width) {
       x = containerRect.width - tooltipWidth - 4;
     }
     if (x < 4) x = 4;
 
-    // If tooltip would go above container, show below
     if (y < 0) {
       y = cellRect.bottom - containerRect.top + 8;
     }
@@ -311,7 +344,6 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
     hoveredCellRef.current = null;
   }, []);
 
-  // Update tooltip position on scroll/resize
   useEffect(() => {
     if (!hoveredDay || !hoveredCellRef.current) return;
 
@@ -357,25 +389,17 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
   return (
     <>
       <style jsx global>{`
-        /* Contribution cell styles */
         .contribution-cell {
-          width: 12px;
-          height: 12px;
-          border-radius: 3px;
+          width: var(--cell-size, 14px);
+          height: var(--cell-size, 14px);
+          border-radius: var(--cell-radius, 3px);
           background-color: var(--cell-bg);
           border: 1px solid var(--cell-border);
           box-shadow: var(--cell-glow);
           transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
           cursor: default;
           will-change: transform;
-        }
-
-        @media (min-width: 640px) {
-          .contribution-cell {
-            width: 14px;
-            height: 14px;
-            border-radius: 3px;
-          }
+          flex-shrink: 0;
         }
 
         .contribution-cell[data-clickable="true"] {
@@ -400,7 +424,6 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
             0 0 0 4px oklch(0.52 0.15 140 / 0.3);
         }
 
-        /* Subtle pulse for high-activity cells */
         .contribution-cell[data-level="4"] {
           animation: cell-glow-pulse 3s ease-in-out infinite;
           animation-delay: var(--anim-delay, 0ms);
@@ -411,7 +434,6 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
           50% { box-shadow: 0 0 12px oklch(0.52 0.15 140 / 0.5); }
         }
 
-        /* Tooltip animations */
         @keyframes tooltip-enter {
           from {
             opacity: 0;
@@ -439,12 +461,12 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
           to { opacity: 1; }
         }
 
-        /* Grid container */
         .contribution-grid {
           display: flex;
-          gap: 3px;
+          gap: ${GAP}px;
           transition: opacity 150ms ease;
           opacity: var(--grid-opacity, 1);
+          width: 100%;
         }
 
         .contribution-grid[style*="--grid-opacity: 0"] {
@@ -453,6 +475,28 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
 
         .contribution-grid[style*="--grid-opacity: 1"] {
           animation: grid-fade-in 200ms ease-out;
+        }
+
+        .contribution-week {
+          display: flex;
+          flex-direction: column;
+          gap: ${GAP}px;
+          flex: 1;
+        }
+
+        .contribution-week-label {
+          width: ${LABEL_WIDTH}px;
+          flex-shrink: 0;
+        }
+
+        .contribution-week-label-cell {
+          height: var(--cell-size, 14px);
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          padding-right: 4px;
+          font-size: 11px;
+          color: oklch(0.55 0 0);
         }
       `}</style>
 
@@ -506,24 +550,24 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
         </div>
 
         {/* Grid container */}
-        <div className="relative overflow-x-auto pb-2 -mx-1 px-1">
+        <div className="relative pb-2" ref={gridContainerRef}>
           {/* Month labels */}
           {viewMode === 'year' && (
-            <div className="flex h-5 mb-2">
-              <div className="w-8 flex-shrink-0" />
+            <div className="flex mb-2" style={{ height: `${Math.max(16, cellSize)}px` }}>
+              <div style={{ width: `${LABEL_WIDTH}px` }} className="flex-shrink-0" />
               <div className="relative flex-1">
                 {monthLabels.map((label, idx) => (
                   <React.Fragment key={`${label.month}-${label.week}`}>
                     <span
-                      className="absolute text-[11px] font-medium text-muted-foreground/80"
-                      style={{ left: `${label.week * 17}px` }}
+                      className="absolute text-[11px] font-medium text-muted-foreground/80 whitespace-nowrap"
+                      style={{ left: `${label.week * (cellSize + GAP)}px` }}
                     >
                       {label.label}
                     </span>
                     {idx > 0 && (
                       <span
                         className="absolute top-4 h-[calc(100%-0.25rem)] w-px bg-border/30"
-                        style={{ left: `${label.week * 17 - 4}px` }}
+                        style={{ left: `${label.week * (cellSize + GAP) - GAP / 2}px` }}
                       />
                     )}
                   </React.Fragment>
@@ -540,12 +584,12 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
             style={{ '--grid-opacity': isGridVisible ? 1 : 0 } as React.CSSProperties}
           >
             {/* Weekday labels */}
-            <div className="flex flex-col gap-[3px] w-8 flex-shrink-0" role="rowgroup">
+            <div className="contribution-week-label" role="rowgroup">
               {WEEKDAY_LABELS.map((label, idx) => (
                 <div
                   key={idx}
                   role="rowheader"
-                  className="h-3 sm:h-3.5 flex items-center justify-end pr-1.5 text-[11px] text-muted-foreground/70"
+                  className="contribution-week-label-cell"
                   aria-label={`星期${label}`}
                 >
                   {idx % 2 === 1 ? label : ''}
@@ -554,9 +598,9 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
             </div>
 
             {/* Cells */}
-            <div className="flex gap-[3px] flex-1" role="rowgroup">
+            <div className="flex flex-1" style={{ gap: `${GAP}px` }} role="rowgroup">
               {gridData.map((week, weekIdx) => (
-                <div key={weekIdx} className="flex flex-col gap-[3px]" role="row">
+                <div key={weekIdx} className="contribution-week" role="row">
                   {week.map((dayData, dayIdx) => {
                     const level = getLevel(dayData.count);
                     const isClickable = dayData.count > 0;
@@ -574,6 +618,7 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
                         onLeave={handleLeave}
                         onClick={handleClick}
                         animationDelay={animDelay}
+                        cellSize={cellSize}
                       />
                     );
                   })}
@@ -641,8 +686,10 @@ export function ContributionGraph({ data, startDate, onDayClick }: ContributionG
             {CELL_COLORS.map((colors, idx) => (
               <div
                 key={idx}
-                className="w-3 h-3 rounded-sm transition-all"
+                className="rounded-sm transition-all"
                 style={{
+                  width: `${Math.max(10, cellSize - 2)}px`,
+                  height: `${Math.max(10, cellSize - 2)}px`,
                   backgroundColor: colors.bg,
                   border: `1px solid ${colors.border}`,
                   boxShadow: colors.glow,
