@@ -32,18 +32,23 @@ export async function GET(request: NextRequest) {
     const reports = await db
       .select({
         date: dailyReports.date,
-        title: dailyReports.title,
-        content: dailyReports.content,
+        count: sql<number>`count(*)`.as('count'),
       })
       .from(dailyReports)
       .where(sql`${dailyReports.date} >= ${startStr} AND ${dailyReports.date} <= ${endStr}`)
+      .groupBy(dailyReports.date)
       .orderBy(asc(dailyReports.date));
 
-    const contributionData = reports.map((report) => ({
-      date: report.date,
-      count: 1,
-      summary: report.title,
-    }));
+    const contributionData = reports.map((report) => {
+      // 确保日期格式为 YYYY-MM-DD
+      const dateStr = typeof report.date === 'string'
+        ? report.date.split('T')[0]
+        : new Date(report.date).toISOString().split('T')[0];
+      return {
+        date: dateStr,
+        count: report.count,
+      };
+    });
 
     return NextResponse.json({
       success: true,
