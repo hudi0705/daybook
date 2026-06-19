@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/storage/database/mysql-client';
 import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, desc, sql } from 'drizzle-orm';
-import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { callOpenAICompatible, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
+import { callOpenAICompatible, validateAiConfig, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
 
 // GET - 获取周报列表或单个周报
 export async function GET(request: NextRequest) {
@@ -103,9 +102,14 @@ ${reportsText}
       { role: 'user', content: prompt },
     ];
 
-    const response = ai_config
-      ? await callOpenAICompatible(ai_config, messages, { model: ai_config.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.7 })
-      : await new LLMClient(new Config(), HeaderUtils.extractForwardHeaders(request.headers)).invoke(messages, { model: 'doubao-seed-2-0-lite-260215', temperature: 0.7 });
+    if (!ai_config) {
+      return NextResponse.json({ success: false, error: '未配置 AI 密钥，请在设置中填写 API Key' }, { status: 400 });
+    }
+    const validationError = validateAiConfig(ai_config);
+    if (validationError) {
+      return NextResponse.json({ success: false, error: `AI 配置无效：${validationError}，请在设置中重新配置` }, { status: 400 });
+    }
+    const response = await callOpenAICompatible(ai_config, messages, { model: ai_config.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.7 });
 
     const summary = response.content;
 
@@ -128,7 +132,13 @@ ${reportsText}
       return NextResponse.json({ success: true, data: data[0] });
     }
   } catch (err) {
+    console.error('[weekly-reports] POST Error:', err);
     const errorMessage = err instanceof Error ? err.message : '未知错误';
+
+    if (errorMessage.includes('AI 配置无效') || errorMessage.includes('请填写') || errorMessage.includes('请检查')) {
+      return NextResponse.json({ success: false, error: errorMessage }, { status: 400 });
+    }
+
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
   }
 }

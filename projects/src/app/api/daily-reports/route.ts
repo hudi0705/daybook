@@ -3,6 +3,36 @@ import { getDb } from '@/storage/database/mysql-client';
 import { dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, gte, lte, desc, sql } from 'drizzle-orm';
 
+// 简单内存缓存（开发模式下有效，生产环境建议用 Redis）
+interface CacheEntry {
+  data: unknown;
+  timestamp: number;
+}
+
+const cache = new Map<string, CacheEntry>();
+const CACHE_TTL = 30 * 1000; // 30 秒缓存
+
+function getCached(key: string): unknown | null {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
+    return entry.data;
+  }
+  cache.delete(key);
+  return null;
+}
+
+function setCache(key: string, data: unknown): void {
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
+function invalidateCache(pattern: string): void {
+  for (const key of cache.keys()) {
+    if (key.includes(pattern)) {
+      cache.delete(key);
+    }
+  }
+}
+
 // GET - 获取日报列表或单个日报
 export async function GET(request: NextRequest) {
   let db;
@@ -24,13 +54,34 @@ export async function GET(request: NextRequest) {
 
   try {
     if (id) {
+      const cacheKey = `daily:id:${id}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json({ success: true, data: cached });
+      }
       const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
-      return NextResponse.json({ success: true, data: data[0] || null });
+      const result = data[0] || null;
+      if (result) setCache(cacheKey, result);
+      return NextResponse.json({ success: true, data: result });
     }
 
     if (date) {
+      const cacheKey = `daily:date:${date}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json({ success: true, data: cached });
+      }
       const data = await db.select().from(dailyReports).where(sql`${dailyReports.date} = ${date}`).limit(1);
-      return NextResponse.json({ success: true, data: data[0] || null });
+      const result = data[0] || null;
+      if (result) setCache(cacheKey, result);
+      return NextResponse.json({ success: true, data: result });
+    }
+
+    // 列表查询缓存
+    const cacheKey = `daily:list:${startDate || ''}:${endDate || ''}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return NextResponse.json({ success: true, data: cached });
     }
 
     const conditions = [];
@@ -40,6 +91,7 @@ export async function GET(request: NextRequest) {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const data = await db.select().from(dailyReports).where(whereClause).orderBy(desc(dailyReports.date)).limit(100);
+    setCache(cacheKey, data);
     return NextResponse.json({ success: true, data });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
@@ -81,6 +133,7 @@ export async function POST(request: NextRequest) {
     });
 
     const data = await db.select().from(dailyReports).where(eq(dailyReports.id, result[0].insertId)).limit(1);
+    invalidateCache('daily:'); // 写入后清除缓存
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
@@ -144,6 +197,7 @@ export async function PUT(request: NextRequest) {
     await db.update(dailyReports).set(updateData).where(eq(dailyReports.id, id));
     const data = await db.select().from(dailyReports).where(eq(dailyReports.id, id)).limit(1);
 
+    invalidateCache('daily:'); // 更新后清除缓存
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
@@ -178,6 +232,7 @@ export async function DELETE(request: NextRequest) {
     const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
     await db.delete(dailyReports).where(eq(dailyReports.id, parseInt(id)));
 
+    invalidateCache('daily:'); // 删除后清除缓存
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';

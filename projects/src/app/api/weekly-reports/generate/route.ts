@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/storage/database/mysql-client';
 import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, asc, sql } from 'drizzle-orm';
-import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { callOpenAICompatible, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
+import { callOpenAICompatible, validateAiConfig, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
 
 // 统一的 LLM 调用函数：优先使用用户自定义配置，回退到 coze SDK
 async function invokeLLM(
@@ -12,12 +11,15 @@ async function invokeLLM(
   requestHeaders: Headers,
   aiConfig?: AiProviderConfig
 ) {
-  if (aiConfig) {
-    return callOpenAICompatible(aiConfig, messages, options);
+  if (!aiConfig) {
+    throw new Error('未配置 AI 密钥，请在设置中填写 API Key');
   }
-  const customHeaders = HeaderUtils.extractForwardHeaders(requestHeaders);
-  const llmClient = new LLMClient(new Config(), customHeaders);
-  return llmClient.invoke(messages, options);
+  // 服务端校验 AI 配置
+  const validationError = validateAiConfig(aiConfig);
+  if (validationError) {
+    throw new Error(`AI 配置无效：${validationError}，请在设置中重新配置`);
+  }
+  return callOpenAICompatible(aiConfig, messages, options);
 }
 
 // POST - 提取周报重点信息
@@ -166,7 +168,14 @@ ${reportsText}
       { status: 400 }
     );
   } catch (err) {
+    console.error('[weekly-reports/generate] Error:', err);
     const errorMessage = err instanceof Error ? err.message : '未知错误';
+
+    // AI 配置错误返回 400，让用户知道需要修改配置
+    if (errorMessage.includes('AI 配置无效') || errorMessage.includes('请填写') || errorMessage.includes('请检查')) {
+      return NextResponse.json({ success: false, error: errorMessage }, { status: 400 });
+    }
+
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
   }
 }

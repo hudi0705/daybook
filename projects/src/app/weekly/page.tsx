@@ -9,11 +9,12 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/
 import { Checkbox } from '@/components/ui/checkbox';
 import { AiSettingsDialog } from '@/components/ai-settings-dialog';
 import { loadAiConfig, type AiProviderConfig } from '@/lib/ai-config';
-import { CalendarIcon, SparklesIcon, TrashIcon, RefreshCwIcon, ArrowLeftIcon, CheckCircle2Icon, Wand2Icon, ListChecksIcon, SettingsIcon } from 'lucide-react';
+import { CalendarIcon, SparklesIcon, TrashIcon, RefreshCwIcon, ArrowLeftIcon, CheckCircle2Icon, Wand2Icon, ListChecksIcon, SettingsIcon, CalendarDaysIcon, ChevronRightIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Link from 'next/link';
+import { WeekPickerDialog } from '@/components/week-picker-dialog';
 
 interface WeeklyReport {
   id: number;
@@ -39,11 +40,21 @@ interface ExtractResult {
 }
 
 export default function WeeklyPage() {
+  // 获取本周周一日期的函数（需要在 useState 之前定义）
+  const getThisWeekStart = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diff);
+    return monday.toISOString().split('T')[0];
+  };
+
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
   const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedReport, setExpandedReport] = useState<number | null>(null);
-  
+
   // AI 设置弹窗
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -53,6 +64,10 @@ export default function WeeklyPage() {
   const [selectedPoints, setSelectedPoints] = useState<Set<number>>(new Set());
   const [weekStartDate, setWeekStartDate] = useState<string>('');
   const [dailyCount, setDailyCount] = useState(0);
+
+  // 周选择器状态
+  const [selectedWeekStart, setSelectedWeekStart] = useState<string>(() => getThisWeekStart());
+  const [weekPickerOpen, setWeekPickerOpen] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -79,13 +94,73 @@ export default function WeeklyPage() {
     }
   };
 
-  const getThisWeekStart = () => {
-    const now = new Date();
-    const day = now.getDay();
+  // 获取任意日期所在周的周一
+  const getWeekStart = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const day = date.getDay();
     const diff = day === 0 ? -6 : 1 - day;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + diff);
+    const monday = new Date(date);
+    monday.setDate(date.getDate() + diff);
     return monday.toISOString().split('T')[0];
+  };
+
+  // 切换到上一周
+  const goToPrevWeek = () => {
+    const current = new Date(selectedWeekStart);
+    current.setDate(current.getDate() - 7);
+    setSelectedWeekStart(current.toISOString().split('T')[0]);
+  };
+
+  // 切换到下一周
+  const goToNextWeek = () => {
+    const current = new Date(selectedWeekStart);
+    current.setDate(current.getDate() + 7);
+    setSelectedWeekStart(current.toISOString().split('T')[0]);
+  };
+
+  // 切换到本周
+  const goToThisWeek = () => {
+    setSelectedWeekStart(getThisWeekStart());
+  };
+
+  // 获取选中周的结束日期
+  const getSelectedWeekEnd = () => {
+    const end = new Date(selectedWeekStart);
+    end.setDate(end.getDate() + 6);
+    return end.toISOString().split('T')[0];
+  };
+
+  // 检查选中周是否是本周
+  const isSelectedWeekThisWeek = () => {
+    return selectedWeekStart === getThisWeekStart();
+  };
+
+  // 获取选中周的日报数量
+  const getSelectedWeekDailyCount = () => {
+    const weekStart = new Date(selectedWeekStart);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+
+    return dailyReports.filter(r => {
+      const reportDate = new Date(r.date);
+      return reportDate >= weekStart && reportDate <= weekEnd;
+    }).length;
+  };
+
+  // 检查选中周是否已有周报
+  const hasSelectedWeekReport = () => {
+    return weeklyReports.some(r => r.week_start_date === selectedWeekStart);
+  };
+
+  // 处理周选择
+  const handleSelectWeek = (weekStart: string) => {
+    setSelectedWeekStart(weekStart);
+  };
+
+  // 处理 API 错误：显示 toast 并弹出设置弹窗
+  const handleApiError = (message: string) => {
+    toast.error(message);
+    setSettingsOpen(true);
   };
 
   // Step 1: 提取重点信息
@@ -97,7 +172,7 @@ export default function WeeklyPage() {
       return;
     }
 
-    const weekStart = getThisWeekStart();
+    const weekStart = selectedWeekStart;
     setStep('extracting');
     setWeekStartDate(weekStart);
 
@@ -112,20 +187,25 @@ export default function WeeklyPage() {
         }),
       });
 
-      const result = await response.json();
+      let result: { success: boolean; error?: string; data?: { points: string[]; daily_report_count: number } };
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error(`服务器返回异常 (${response.status})，请刷新页面重试`);
+      }
       if (result.success) {
-        setExtractedPoints(result.data.points);
-        setDailyCount(result.data.daily_report_count);
+        setExtractedPoints(result.data!.points);
+        setDailyCount(result.data!.daily_report_count);
         setStep('selecting');
-        // 默认全选前3个重点
         setSelectedPoints(new Set([0, 1, 2]));
       } else {
-        toast.error(result.error);
+        handleApiError(result.error || '请求失败');
         setStep('idle');
       }
     } catch (err) {
       console.error('提取重点失败:', err);
-      toast.error('提取重点失败，请重试');
+      const msg = err instanceof Error ? err.message : '提取重点失败，请重试';
+      handleApiError(msg);
       setStep('idle');
     }
   };
@@ -159,17 +239,23 @@ export default function WeeklyPage() {
         }),
       });
 
-      const result = await response.json();
+      let result: { success: boolean; error?: string; data?: unknown };
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error(`服务器返回异常 (${response.status})，请刷新页面重试`);
+      }
       if (result.success) {
         await fetchData();
         resetGenerateFlow();
       } else {
-        toast.error(result.error);
+        handleApiError(result.error || '请求失败');
         setStep('selecting');
       }
     } catch (err) {
       console.error('生成周报失败:', err);
-      toast.error('生成周报失败，请重试');
+      const msg = err instanceof Error ? err.message : '生成周报失败，请重试';
+      handleApiError(msg);
       setStep('selecting');
     }
   };
@@ -217,22 +303,6 @@ export default function WeeklyPage() {
     return `${startDate.getMonth() + 1}月${startDate.getDate()}日 - ${endDate.getMonth() + 1}月${endDate.getDate()}日`;
   };
 
-  const getThisWeekDailyCount = () => {
-    const weekStart = new Date(getThisWeekStart());
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    
-    return dailyReports.filter(r => {
-      const reportDate = new Date(r.date);
-      return reportDate >= weekStart && reportDate <= weekEnd;
-    }).length;
-  };
-
-  const hasThisWeekReport = () => {
-    const thisWeekStart = getThisWeekStart();
-    return weeklyReports.some(r => r.week_start_date === thisWeekStart);
-  };
-
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -249,35 +319,75 @@ export default function WeeklyPage() {
             </div>
             <div>
               <h1 className="text-base sm:text-lg font-semibold text-foreground">周报生成</h1>
-              <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">AI 智能汇总本周重点</p>
+              <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">AI 智能汇总周报重点</p>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSettingsOpen(true)}
-            className="shrink-0"
-          >
-            <SettingsIcon className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setWeekPickerOpen(true)}
+              className="shrink-0"
+              title="选择周"
+            >
+              <CalendarDaysIcon className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSettingsOpen(true)}
+              className="shrink-0"
+              title="AI 设置"
+            >
+              <SettingsIcon className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        {/* 本周状态卡片 */}
+        {/* 状态卡片 */}
         <section className="mb-6 sm:mb-8">
           <Card className="border-accent/20 bg-gradient-to-br from-accent/5 via-primary/5 to-accent/5">
             <CardContent className="p-5 sm:p-6">
+              {/* 当前选中周 */}
+              <div className="mb-4 pb-4 border-b border-border/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CalendarDaysIcon className="w-4 h-4 text-muted-foreground" />
+                    <p className="text-sm font-medium text-muted-foreground">当前选中</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setWeekPickerOpen(true)}
+                    className="h-7 text-xs gap-1.5"
+                  >
+                    切换周
+                    <ChevronRightIcon className="w-3 h-3" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <p className="text-lg font-semibold text-foreground">
+                    {formatDateRange(selectedWeekStart, getSelectedWeekEnd())}
+                  </p>
+                  {isSelectedWeekThisWeek() && (
+                    <Badge variant="secondary" className="text-xs">本周</Badge>
+                  )}
+                </div>
+              </div>
+
+              {/* 状态信息 */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-4 sm:gap-6">
                   <div className="text-center sm:text-left">
-                    <p className="text-3xl sm:text-4xl font-bold text-accent">{getThisWeekDailyCount()}</p>
-                    <p className="text-xs sm:text-sm text-muted-foreground mt-1">本周日报</p>
+                    <p className="text-3xl sm:text-4xl font-bold text-accent">{getSelectedWeekDailyCount()}</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground mt-1">日报数量</p>
                   </div>
                   <div className="w-px h-12 bg-border hidden sm:block" />
                   <div className="flex items-center gap-2">
-                    {hasThisWeekReport() ? (
+                    {hasSelectedWeekReport() ? (
                       <Badge variant="default" className="gap-1.5 py-1.5">
                         <CheckCircle2Icon className="w-3.5 h-3.5" />
                         已生成周报
@@ -290,11 +400,11 @@ export default function WeeklyPage() {
                 {step === 'idle' && (
                   <Button
                     onClick={handleExtractPoints}
-                    disabled={getThisWeekDailyCount() === 0}
+                    disabled={getSelectedWeekDailyCount() === 0}
                     className="gap-2 w-full sm:w-auto"
                   >
                     <Wand2Icon className="w-4 h-4" />
-                    {hasThisWeekReport() ? '重新生成周报' : '开始生成周报'}
+                    {hasSelectedWeekReport() ? '重新生成周报' : '开始生成周报'}
                   </Button>
                 )}
               </div>
@@ -332,7 +442,7 @@ export default function WeeklyPage() {
                     <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
                       <SparklesIcon className="w-6 h-6 text-primary animate-pulse" />
                     </div>
-                    <p className="text-sm text-muted-foreground">AI 正在分析本周日报，提取重点信息...</p>
+                    <p className="text-sm text-muted-foreground">AI 正在分析日报内容，提取重点信息...</p>
                   </div>
                 )}
 
@@ -493,17 +603,21 @@ export default function WeeklyPage() {
           )}
         </section>
 
-        {/* 本周日报预览 */}
+        {/* 选中周日报预览 */}
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm sm:text-base font-semibold flex items-center gap-2">
-              <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-              本周日报预览
+              <CalendarDaysIcon className="w-4 h-4 text-muted-foreground" />
+              日报预览
             </h2>
+            <Badge variant="outline" className="text-xs gap-1">
+              <CalendarIcon className="w-3 h-3" />
+              {getSelectedWeekDailyCount()} 篇
+            </Badge>
           </div>
 
           {(() => {
-            const weekStart = new Date(getThisWeekStart());
+            const weekStart = new Date(selectedWeekStart);
             const weekEnd = new Date(weekStart);
             weekEnd.setDate(weekStart.getDate() + 6);
             const weekDailyReports = dailyReports.filter(r => {
@@ -520,7 +634,7 @@ export default function WeeklyPage() {
                         <CalendarIcon />
                       </EmptyMedia>
                       <EmptyHeader>
-                        <EmptyTitle>本周还没有日报</EmptyTitle>
+                        <EmptyTitle>这一周还没有日报</EmptyTitle>
                         <EmptyDescription>去首页写几篇日报吧</EmptyDescription>
                       </EmptyHeader>
                     </Empty>
@@ -556,6 +670,12 @@ export default function WeeklyPage() {
       </main>
 
       <AiSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <WeekPickerDialog
+        open={weekPickerOpen}
+        onOpenChange={setWeekPickerOpen}
+        selectedWeekStart={selectedWeekStart}
+        onSelectWeek={handleSelectWeek}
+      />
     </div>
   );
 }

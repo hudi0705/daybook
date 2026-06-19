@@ -31,6 +31,7 @@ import {
   Rows3Icon,
 } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 
 interface DailyReport {
   id: number;
@@ -243,10 +244,15 @@ export default function HomePage() {
       if (result.success) {
         await fetchReports();
         await fetchContribution();
+        toast.success(editingReport ? '日报已更新' : '日报已保存', {
+          description: `${dateStr} 的日报已成功${editingReport ? '更新' : '保存'}`,
+        });
         resetForm();
       } else {
         console.error('保存失败 - 服务端返回:', result.error);
-        alert(result.error || '保存失败，请重试');
+        toast.error('保存失败', {
+          description: result.error || '请重试',
+        });
       }
     } catch (err) {
       console.error('保存失败 - 请求异常:', err);
@@ -264,13 +270,18 @@ export default function HomePage() {
       if (result.success) {
         await fetchReports();
         await fetchContribution();
+        toast.success('日报已删除');
       } else {
         console.error('删除失败 - 服务端返回:', result.error);
-        alert(result.error || '删除失败，请重试');
+        toast.error('删除失败', {
+          description: result.error || '请重试',
+        });
       }
     } catch (err) {
       console.error('删除失败 - 请求异常:', err);
-      alert('删除失败，请重试');
+      toast.error('删除失败', {
+        description: '请重试',
+      });
     }
   };
 
