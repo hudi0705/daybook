@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ExportButton } from '@/components/export-button';
+import { exportWeeklyReportPDF, exportWeeklyReportWord, exportWeeklyReportMarkdown } from '@/lib/export/weekly-report';
 import {
   ArrowLeftIcon,
   TrashIcon,
@@ -29,6 +31,7 @@ export default function WeeklyReportDetailPage() {
 
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchReport();
@@ -63,6 +66,21 @@ export default function WeeklyReportDetailPage() {
       }
     } catch (err) {
       console.error('删除失败:', err);
+    }
+  };
+
+  const handleExport = async (format: 'pdf' | 'word' | 'md') => {
+    if (!report) return;
+    switch (format) {
+      case 'pdf':
+        await exportWeeklyReportPDF(report, contentRef.current);
+        break;
+      case 'word':
+        await exportWeeklyReportWord(report);
+        break;
+      case 'md':
+        exportWeeklyReportMarkdown(report);
+        break;
     }
   };
 
@@ -109,15 +127,18 @@ export default function WeeklyReportDetailPage() {
             <ArrowLeftIcon className="w-3.5 h-3.5" />
             返回
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-1.5 text-xs text-muted-foreground hover:text-destructive"
-            onClick={handleDelete}
-          >
-            <TrashIcon className="w-3.5 h-3.5" />
-            删除
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <ExportButton onExport={handleExport} />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+              onClick={handleDelete}
+            >
+              <TrashIcon className="w-3.5 h-3.5" />
+              删除
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -140,7 +161,7 @@ export default function WeeklyReportDetailPage() {
       </section>
 
       {/* Content */}
-      <main className="max-w-3xl mx-auto px-5 sm:px-8">
+      <main className="max-w-3xl mx-auto px-5 sm:px-8" ref={contentRef}>
         <div className="border-t border-border/40" />
         <article className="py-8 prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/85 prose-p:leading-[1.8] prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:border prose-pre:border-border/30 prose-blockquote:border-l-primary/30 prose-blockquote:text-muted-foreground prose-a:text-primary prose-a:underline-offset-2 prose-hr:border-border/30 prose-li:text-foreground/85">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>

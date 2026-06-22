@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { RichTextEditor } from '@/components/rich-text-editor';
+import { ExportButton } from '@/components/export-button';
+import { exportDailyReportPDF, exportDailyReportWord, exportDailyReportMarkdown } from '@/lib/export/daily-report';
 import {
   ArrowLeftIcon,
   EditIcon,
@@ -25,6 +25,11 @@ interface DailyReport {
   tags?: string[];
   created_at: string;
   updated_at?: string;
+}
+
+// 去除 HTML 标签，检查纯文本是否为空
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').trim();
 }
 
 const moodEmojiMap: Record<string, string> = {
@@ -66,6 +71,7 @@ export default function DailyReportDetailPage() {
   const [mood, setMood] = useState('');
   const [editTags, setEditTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchReport();
@@ -90,7 +96,12 @@ export default function DailyReportDetailPage() {
 
   const openEditDialog = () => {
     if (report) {
-      setSelectedDate(new Date(report.date));
+      const dateStr = String(report.date || '').slice(0, 10);
+      const parts = dateStr.split('-');
+      const y = Number(parts[0]) || new Date().getFullYear();
+      const m = Number(parts[1]) || (new Date().getMonth() + 1);
+      const d = Number(parts[2]) || new Date().getDate();
+      setSelectedDate(new Date(y, m - 1, d));
       setTitle(report.title);
       setContent(report.content);
       setMood(report.mood || '');
@@ -113,15 +124,20 @@ export default function DailyReportDetailPage() {
   };
 
   const handleUpdate = async () => {
-    if (!report || !title.trim() || !content.trim()) return;
+    if (!report || !title.trim() || !stripHtml(content)) return;
 
     setSaving(true);
     try {
+      const dateStr = selectedDate
+        ? `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`
+        : report.date.slice(0, 10);
+
       const response = await fetch('/api/daily-reports', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: report.id,
+          date: dateStr,
           title,
           content,
           mood,
@@ -183,9 +199,24 @@ export default function DailyReportDetailPage() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      if (title.trim() && content.trim() && !saving) {
+      if (title.trim() && stripHtml(content) && !saving) {
         handleUpdate();
       }
+    }
+  };
+
+  const handleExport = async (format: 'pdf' | 'word' | 'md') => {
+    if (!report) return;
+    switch (format) {
+      case 'pdf':
+        await exportDailyReportPDF(report, contentRef.current);
+        break;
+      case 'word':
+        await exportDailyReportWord(report);
+        break;
+      case 'md':
+        exportDailyReportMarkdown(report);
+        break;
     }
   };
 
@@ -227,6 +258,7 @@ export default function DailyReportDetailPage() {
             返回
           </Button>
           <div className="flex items-center gap-1.5">
+            <ExportButton onExport={handleExport} />
             <Button
               variant="ghost"
               size="sm"
@@ -282,7 +314,7 @@ export default function DailyReportDetailPage() {
       </section>
 
       {/* ── Main content ── */}
-      <main className="max-w-3xl mx-auto px-5 sm:px-8">
+      <main className="max-w-3xl mx-auto px-5 sm:px-8" ref={contentRef}>
         {/* Title */}
         <div className="pt-8 pb-4">
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground tracking-tight leading-tight">
@@ -307,12 +339,11 @@ export default function DailyReportDetailPage() {
         {/* Divider */}
         <div className="border-t border-border/40" />
 
-        {/* Markdown content */}
-        <article className="py-8 prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/85 prose-p:leading-[1.8] prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:border prose-pre:border-border/30 prose-blockquote:border-l-primary/30 prose-blockquote:text-muted-foreground prose-a:text-primary prose-a:underline-offset-2 prose-hr:border-border/30 prose-li:text-foreground/85">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {report.content}
-          </ReactMarkdown>
-        </article>
+        {/* Content */}
+        <article
+          className="py-8 prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/85 prose-p:leading-[1.8] prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:border prose-pre:border-border/30 prose-blockquote:border-l-primary/30 prose-blockquote:text-muted-foreground prose-a:text-primary prose-a:underline-offset-2 prose-hr:border-border/30 prose-li:text-foreground/85"
+          dangerouslySetInnerHTML={{ __html: report.content }}
+        />
 
         {/* Footer meta */}
         <div className="border-t border-border/30 py-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6 text-xs text-muted-foreground/60">
@@ -331,9 +362,9 @@ export default function DailyReportDetailPage() {
 
       {/* ── Edit dialog ── */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-[560px] max-h-[85vh] overflow-y-auto p-0">
+        <DialogContent className="max-w-[560px] max-h-[85vh] flex flex-col p-0">
           {/* Dialog header: green surface */}
-          <div className="relative bg-primary px-6 pt-5 pb-6 overflow-hidden">
+          <div className="relative bg-primary px-6 pt-5 pb-6 overflow-hidden flex-shrink-0">
             <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\'/%3E%3C/svg%3E")' }} />
 
             <div className="relative flex items-end justify-between">
@@ -357,12 +388,12 @@ export default function DailyReportDetailPage() {
           </div>
 
           {/* Dialog body */}
-          <div className="px-6 pt-6 pb-5 space-y-5" onKeyDown={handleKeyDown}>
+          <div className="px-6 pt-6 pb-5 space-y-5 flex-1 overflow-y-auto min-h-0" onKeyDown={handleKeyDown}>
             <div className="space-y-2">
               <p className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">日期</p>
               <Calendar
                 mode="single"
-                selected={selectedDate}
+                selected={selectedDate instanceof Date && !isNaN(selectedDate.getTime()) ? selectedDate : new Date()}
                 onSelect={setSelectedDate}
                 className="rounded-xl border border-border/40"
               />
@@ -375,19 +406,13 @@ export default function DailyReportDetailPage() {
               className="w-full text-xl font-bold text-foreground placeholder:text-muted-foreground/30 bg-transparent border-none outline-none focus:ring-0 tracking-tight"
             />
 
-            <div>
-              <Textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="记录今天的工作、学习、生活..."
-                rows={10}
-                className="resize-none text-sm leading-[1.8] focus-visible:ring-primary/30 bg-muted/30 border-border/40"
-              />
-              <div className="flex items-center justify-between mt-2">
-                <p className="text-[11px] text-muted-foreground/60">支持 Markdown</p>
-                <p className="text-[11px] text-muted-foreground/60 tabular-nums">{content.length} 字</p>
-              </div>
-            </div>
+            <RichTextEditor
+              value={content}
+              onChange={setContent}
+              placeholder="记录今天的工作、学习、生活..."
+              minHeight="200px"
+              maxHeight="320px"
+            />
 
             {/* Mood */}
             <div>
@@ -458,7 +483,7 @@ export default function DailyReportDetailPage() {
           </div>
 
           {/* Dialog footer */}
-          <div className="px-6 py-5 border-t border-border/40 flex items-center justify-between">
+          <div className="px-6 py-5 border-t border-border/40 flex items-center justify-between flex-shrink-0">
             <button
               type="button"
               onClick={() => setEditDialogOpen(false)}
@@ -475,7 +500,7 @@ export default function DailyReportDetailPage() {
               <button
                 type="button"
                 onClick={handleUpdate}
-                disabled={!title.trim() || !content.trim() || saving}
+                disabled={!title.trim() || !stripHtml(content) || saving}
                 className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 shadow-sm"
               >
                 {saving ? <Spinner className="w-3.5 h-3.5" /> : null}

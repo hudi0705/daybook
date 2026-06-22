@@ -3,25 +3,41 @@ import { getDb } from '@/storage/database/mysql-client';
 import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { callOpenAICompatible, validateAiConfig, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
+import { getCurrentUserId } from '@/lib/auth';
 
 // GET - 获取周报列表或单个周报
 export async function GET(request: NextRequest) {
-  const db = getDb();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[weekly-reports GET] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const startDate = searchParams.get('start_date');
 
   try {
     if (id) {
-      const data = await db.select().from(weeklyReports).where(eq(weeklyReports.id, parseInt(id))).limit(1);
+      const data = await db.select().from(weeklyReports).where(and(eq(weeklyReports.id, parseInt(id)), eq(weeklyReports.user_id, userId))).limit(1);
       return NextResponse.json({ success: true, data: data[0] || null });
     }
 
-    const conditions = [];
+    const conditions = [eq(weeklyReports.user_id, userId)];
     if (startDate) {
       conditions.push(sql`${weeklyReports.week_start_date} = ${startDate}`);
     }
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const data = await db.select().from(weeklyReports).where(whereClause).orderBy(desc(weeklyReports.week_start_date)).limit(50);
     return NextResponse.json({ success: true, data });
@@ -33,7 +49,21 @@ export async function GET(request: NextRequest) {
 
 // POST - 生成周报
 export async function POST(request: NextRequest) {
-  const db = getDb();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[weekly-reports POST] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
 
   try {
     const body = await request.json();
@@ -52,7 +82,7 @@ export async function POST(request: NextRequest) {
     const week_end_date = endDate.toISOString().split('T')[0];
 
     const existing = await db.select().from(weeklyReports)
-      .where(sql`${weeklyReports.week_start_date} = ${week_start_date}`).limit(1);
+      .where(and(sql`${weeklyReports.week_start_date} = ${week_start_date}`, eq(weeklyReports.user_id, userId))).limit(1);
 
     if (existing.length > 0 && !force_regenerate) {
       return NextResponse.json({ success: true, data: existing[0] });
@@ -67,7 +97,7 @@ export async function POST(request: NextRequest) {
       tags: dailyReports.tags,
     })
       .from(dailyReports)
-      .where(sql`${dailyReports.date} >= ${week_start_date} AND ${dailyReports.date} <= ${week_end_date}`)
+      .where(and(sql`${dailyReports.date} >= ${week_start_date} AND ${dailyReports.date} <= ${week_end_date}`, eq(dailyReports.user_id, userId)))
       .orderBy(dailyReports.date);
 
     if (!reports || reports.length === 0) {
@@ -114,6 +144,7 @@ ${reportsText}
     const summary = response.content;
 
     const reportData = {
+      user_id: userId,
       week_start_date: new Date(week_start_date),
       week_end_date: new Date(week_end_date),
       summary,
@@ -145,7 +176,17 @@ ${reportsText}
 
 // DELETE - 删除周报
 export async function DELETE(request: NextRequest) {
-  const db = getDb();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[weekly-reports DELETE] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 

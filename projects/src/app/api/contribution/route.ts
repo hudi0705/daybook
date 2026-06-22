@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/storage/database/mysql-client';
 import { dailyReports } from '@/storage/database/shared/schema';
-import { asc, sql } from 'drizzle-orm';
+import { asc, sql, eq, and } from 'drizzle-orm';
+import { getCurrentUserId } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
     const db = getDb();
+
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const year = searchParams.get('year') || new Date().getFullYear().toString();
     const viewMode = searchParams.get('viewMode') || 'year';
@@ -35,11 +42,11 @@ export async function GET(request: NextRequest) {
         count: sql<number>`count(*)`.as('count'),
       })
       .from(dailyReports)
-      .where(sql`${dailyReports.date} >= ${startStr} AND ${dailyReports.date} <= ${endStr}`)
+      .where(and(sql`${dailyReports.date} >= ${startStr} AND ${dailyReports.date} <= ${endStr}`, eq(dailyReports.user_id, userId)))
       .groupBy(dailyReports.date)
       .orderBy(asc(dailyReports.date));
 
-    const contributionData = reports.map((report) => {
+    const contributionData = reports.map((report: { date: string | Date; count: number }) => {
       // 确保日期格式为 YYYY-MM-DD
       const dateStr = typeof report.date === 'string'
         ? report.date.split('T')[0]

@@ -3,6 +3,7 @@ import { getDb } from '@/storage/database/mysql-client';
 import { weeklyReports, dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, asc, sql } from 'drizzle-orm';
 import { callOpenAICompatible, validateAiConfig, type AiProviderConfig, type LLMMessage } from '@/lib/ai-config';
+import { getCurrentUserId } from '@/lib/auth';
 
 // 统一的 LLM 调用函数：优先使用用户自定义配置，回退到 coze SDK
 async function invokeLLM(
@@ -24,7 +25,16 @@ async function invokeLLM(
 
 // POST - 提取周报重点信息
 export async function POST(request: NextRequest) {
-  const db = getDb();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error('[weekly-reports/generate POST] 数据库连接失败:', err);
+    return NextResponse.json(
+      { success: false, error: '数据库连接失败，请检查 MySQL 配置' },
+      { status: 500 }
+    );
+  }
 
   try {
     const body = await request.json();
@@ -139,8 +149,10 @@ ${reportsText}
       const response = await invokeLLM(messages, { model: ai_config?.modelName || 'doubao-seed-2-0-lite-260215', temperature: 0.7 }, request.headers, ai_config);
 
       const summary = response.content;
+      const userId = await getCurrentUserId();
 
       const reportData = {
+        user_id: userId!,
         week_start_date: new Date(week_start_date),
         week_end_date: new Date(week_end_date),
         summary,

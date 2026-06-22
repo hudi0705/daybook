@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/storage/database/mysql-client';
 import { dailyReports } from '@/storage/database/shared/schema';
 import { eq, and, gte, lte, desc, sql } from 'drizzle-orm';
+import { getCurrentUserId } from '@/lib/auth';
 
 // 简单内存缓存（开发模式下有效，生产环境建议用 Redis）
 interface CacheEntry {
@@ -46,6 +47,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const date = searchParams.get('date');
@@ -54,43 +60,49 @@ export async function GET(request: NextRequest) {
 
   try {
     if (id) {
-      const cacheKey = `daily:id:${id}`;
+      const cacheKey = `daily:id:${id}:${userId}`;
       const cached = getCached(cacheKey);
-      if (cached) {
-        return NextResponse.json({ success: true, data: cached });
-      }
-      const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
+      if (cached) return NextResponse.json({ success: true, data: cached });
+      const data = await db.select().from(dailyReports).where(and(eq(dailyReports.id, parseInt(id)), eq(dailyReports.user_id, userId))).limit(1);
       const result = data[0] || null;
       if (result) setCache(cacheKey, result);
       return NextResponse.json({ success: true, data: result });
     }
 
     if (date) {
-      const cacheKey = `daily:date:${date}`;
+      const cacheKey = `daily:date:${date}:${userId}`;
       const cached = getCached(cacheKey);
-      if (cached) {
-        return NextResponse.json({ success: true, data: cached });
-      }
-      const data = await db.select().from(dailyReports).where(sql`${dailyReports.date} = ${date}`).limit(1);
+      if (cached) return NextResponse.json({ success: true, data: cached });
+      const data = await db.select().from(dailyReports).where(and(sql`${dailyReports.date} = ${date}`, eq(dailyReports.user_id, userId))).limit(1);
       const result = data[0] || null;
       if (result) setCache(cacheKey, result);
       return NextResponse.json({ success: true, data: result });
     }
 
-    // 列表查询缓存
-    const cacheKey = `daily:list:${startDate || ''}:${endDate || ''}`;
+    const cacheKey = `daily:list:${startDate || ''}:${endDate || ''}:${userId}`;
     const cached = getCached(cacheKey);
-    if (cached) {
-      return NextResponse.json({ success: true, data: cached });
-    }
+    if (cached) return NextResponse.json({ success: true, data: cached });
 
-    const conditions = [];
+    const conditions = [eq(dailyReports.user_id, userId)];
     if (startDate && endDate) {
       conditions.push(sql`${dailyReports.date} >= ${startDate}`, sql`${dailyReports.date} <= ${endDate}`);
     }
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
-    const data = await db.select().from(dailyReports).where(whereClause).orderBy(desc(dailyReports.date)).limit(100);
+    // 列表查询只返回必要字段，不返回完整 content
+    const data = await db.select({
+      id: dailyReports.id,
+      user_id: dailyReports.user_id,
+      date: dailyReports.date,
+      title: dailyReports.title,
+      mood: dailyReports.mood,
+      tags: dailyReports.tags,
+      is_published: dailyReports.is_published,
+      created_at: dailyReports.created_at,
+      updated_at: dailyReports.updated_at,
+      // 只返回 content 前 200 字符用于预览
+      content: sql<string>`LEFT(${dailyReports.content}, 200)`,
+    }).from(dailyReports).where(whereClause).orderBy(desc(dailyReports.date)).limit(100);
     setCache(cacheKey, data);
     return NextResponse.json({ success: true, data });
   } catch (err) {
@@ -112,9 +124,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
-    const { date, title, content, mood, tags } = body;
+    const { date, mood, tags } = body;
+    const title = String(body.title || '').trim();
+    const content = String(body.content || '').trim();
 
     if (!date || !title || !content) {
       return NextResponse.json(
@@ -124,6 +143,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await db.insert(dailyReports).values({
+      user_id: userId,
       date,
       title,
       content,
@@ -137,9 +157,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
-    console.error('[daily-reports POST] 创建日报失败:', errorMessage);
+    const causeMessage = err instanceof Error && err.cause ? String(err.cause) : '';
+    console.error('[daily-reports POST] 创建日报失败:', err);
 
-    if (errorMessage.includes('Duplicate entry')) {
+    if (errorMessage.includes('Duplicate entry') || causeMessage.includes('Duplicate entry')) {
       return NextResponse.json(
         { success: false, error: '该日期已有日报，请使用更新功能' },
         { status: 400 }
@@ -174,9 +195,14 @@ export async function PUT(request: NextRequest) {
     );
   }
 
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
-    const { id, title, content, mood, tags } = body;
+    const { id, date, title, content, mood, tags } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -185,22 +211,39 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // 验证日报归属
+    const existing = await db.select().from(dailyReports).where(and(eq(dailyReports.id, id), eq(dailyReports.user_id, userId))).limit(1);
+    if (existing.length === 0) {
+      return NextResponse.json({ success: false, error: '日报不存在或无权修改' }, { status: 404 });
+    }
+
     const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      updated_at: new Date(),
     };
 
+    if (date) updateData.date = date;
     if (title) updateData.title = title;
     if (content) updateData.content = content;
     if (mood) updateData.mood = mood;
     if (tags) updateData.tags = tags;
 
-    await db.update(dailyReports).set(updateData).where(eq(dailyReports.id, id));
+    await db.update(dailyReports).set(updateData).where(and(eq(dailyReports.id, id), eq(dailyReports.user_id, userId)));
     const data = await db.select().from(dailyReports).where(eq(dailyReports.id, id)).limit(1);
 
-    invalidateCache('daily:'); // 更新后清除缓存
+    invalidateCache('daily:');
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';
+    const causeMessage = err instanceof Error && err.cause ? String(err.cause) : '';
+    console.error('[daily-reports PUT] 更新日报失败:', err);
+
+    if (errorMessage.includes('Duplicate entry') || causeMessage.includes('Duplicate entry')) {
+      return NextResponse.json(
+        { success: false, error: '该日期已有日报，请选择其他日期' },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
   }
 }
@@ -218,6 +261,11 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 
@@ -229,10 +277,13 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const data = await db.select().from(dailyReports).where(eq(dailyReports.id, parseInt(id))).limit(1);
-    await db.delete(dailyReports).where(eq(dailyReports.id, parseInt(id)));
+    const data = await db.select().from(dailyReports).where(and(eq(dailyReports.id, parseInt(id)), eq(dailyReports.user_id, userId))).limit(1);
+    if (data.length === 0) {
+      return NextResponse.json({ success: false, error: '日报不存在或无权删除' }, { status: 404 });
+    }
+    await db.delete(dailyReports).where(and(eq(dailyReports.id, parseInt(id)), eq(dailyReports.user_id, userId)));
 
-    invalidateCache('daily:'); // 删除后清除缓存
+    invalidateCache('daily:');
     return NextResponse.json({ success: true, data: data[0] });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '未知错误';

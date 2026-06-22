@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/storage/database/mysql-client';
 import { notes } from '@/storage/database/shared/schema';
 import { eq, and, like, or, desc, sql } from 'drizzle-orm';
+import { getCurrentUserId } from '@/lib/auth';
 
 // GET - 获取笔记列表（支持分页、筛选、搜索）
 export async function GET(request: NextRequest) {
@@ -70,6 +71,10 @@ export async function GET(request: NextRequest) {
 // POST - 创建新笔记
 export async function POST(request: NextRequest) {
   const db = getDb();
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: '未登录' }, { status: 401 });
+  }
 
   try {
     const body = await request.json();
@@ -83,6 +88,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await db.insert(notes).values({
+      user_id: userId,
       title,
       content,
       category_id: category_id || null,

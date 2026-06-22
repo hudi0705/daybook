@@ -65,6 +65,11 @@ export default function WeeklyPage() {
   const [weekStartDate, setWeekStartDate] = useState<string>('');
   const [dailyCount, setDailyCount] = useState(0);
 
+  // 重点编辑状态
+  const [newPoint, setNewPoint] = useState('');
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState('');
+
   // 周选择器状态
   const [selectedWeekStart, setSelectedWeekStart] = useState<string>(() => getThisWeekStart());
   const [weekPickerOpen, setWeekPickerOpen] = useState(false);
@@ -278,6 +283,48 @@ export default function WeeklyPage() {
     setSelectedPoints(newSet);
   };
 
+  // 添加新重点
+  const handleAddPoint = () => {
+    if (!newPoint.trim()) return;
+    setExtractedPoints([...extractedPoints, newPoint.trim()]);
+    setNewPoint('');
+  };
+
+  // 开始编辑重点
+  const startEditPoint = (index: number) => {
+    setEditingIndex(index);
+    setEditingText(extractedPoints[index]);
+  };
+
+  // 保存编辑
+  const saveEditPoint = () => {
+    if (editingIndex === null || !editingText.trim()) return;
+    const newPoints = [...extractedPoints];
+    newPoints[editingIndex] = editingText.trim();
+    setExtractedPoints(newPoints);
+    setEditingIndex(null);
+    setEditingText('');
+  };
+
+  // 取消编辑
+  const cancelEditPoint = () => {
+    setEditingIndex(null);
+    setEditingText('');
+  };
+
+  // 删除重点
+  const handleDeletePoint = (index: number) => {
+    const newPoints = extractedPoints.filter((_, i) => i !== index);
+    setExtractedPoints(newPoints);
+    // 更新选中状态
+    const newSelected = new Set<number>();
+    selectedPoints.forEach(i => {
+      if (i < index) newSelected.add(i);
+      else if (i > index) newSelected.add(i - 1);
+    });
+    setSelectedPoints(newSelected);
+  };
+
   const handleDelete = async (id: number) => {
     if (!confirm('确定要删除这份周报吗？')) return;
 
@@ -456,23 +503,86 @@ export default function WeeklyPage() {
                       {extractedPoints.map((point, index) => (
                         <div
                           key={index}
-                          className={`flex items-start gap-3 p-3 rounded-lg border transition-all cursor-pointer ${
+                          className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${
                             selectedPoints.has(index)
                               ? 'border-primary bg-primary/10 shadow-sm'
                               : 'border-border hover:border-primary/50 hover:bg-muted/30'
                           }`}
-                          onClick={() => togglePoint(index)}
                         >
                           <Checkbox
                             checked={selectedPoints.has(index)}
                             onCheckedChange={() => togglePoint(index)}
                             className="mt-0.5 shrink-0"
                           />
-                          <p className="text-sm">
-                            <span className="font-medium text-primary">{index + 1}.</span> {point}
-                          </p>
+                          {editingIndex === index ? (
+                            <div className="flex-1 flex gap-2">
+                              <input
+                                type="text"
+                                value={editingText}
+                                onChange={(e) => setEditingText(e.target.value)}
+                                className="flex-1 text-sm px-2 py-1 rounded border border-primary/50 bg-background focus:outline-none focus:border-primary"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveEditPoint();
+                                  if (e.key === 'Escape') cancelEditPoint();
+                                }}
+                              />
+                              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={saveEditPoint}>
+                                ✓
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={cancelEditPoint}>
+                                ✕
+                              </Button>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-sm flex-1 cursor-pointer" onClick={() => togglePoint(index)}>
+                                <span className="font-medium text-primary">{index + 1}.</span> {point}
+                              </p>
+                              <div className="flex gap-1 shrink-0">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
+                                  onClick={() => startEditPoint(index)}
+                                >
+                                  ✏️
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                                  onClick={() => handleDeletePoint(index)}
+                                >
+                                  🗑️
+                                </Button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       ))}
+                    </div>
+                    {/* 添加新重点 */}
+                    <div className="flex gap-2 pt-2 border-t border-border/50">
+                      <input
+                        type="text"
+                        value={newPoint}
+                        onChange={(e) => setNewPoint(e.target.value)}
+                        placeholder="添加新重点..."
+                        className="flex-1 text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:border-primary"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddPoint();
+                        }}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAddPoint}
+                        disabled={!newPoint.trim()}
+                        className="gap-1"
+                      >
+                        + 添加
+                      </Button>
                     </div>
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-border">
                       <p className="text-sm text-muted-foreground order-2 sm:order-1">

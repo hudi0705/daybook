@@ -10,15 +10,18 @@ let pool: mysql.Pool | null = null;
 function getPool(): mysql.Pool {
   if (pool) return pool;
 
-  const config = {
+  const config: mysql.PoolOptions = {
     host: process.env.MYSQL_HOST || 'localhost',
     port: parseInt(process.env.MYSQL_PORT || '3306'),
     user: process.env.MYSQL_USER || 'root',
     password: process.env.MYSQL_PASSWORD || '',
     database: process.env.MYSQL_DATABASE || 'daybook',
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 20,
     queueLimit: 0,
+    connectTimeout: 10000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
   };
 
   console.log('[MySQL] 连接配置:', {
@@ -30,6 +33,11 @@ function getPool(): mysql.Pool {
   });
 
   pool = mysql.createPool(config);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pool as any).on('error', (err: Error) => {
+    console.error('[MySQL] 连接池错误:', err.message);
+  });
 
   return pool;
 }

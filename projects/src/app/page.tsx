@@ -2,14 +2,17 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/auth-context';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
+import { RichTextEditor } from '@/components/rich-text-editor';
 import { ContributionGraph } from '@/components/contribution-graph';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { exportDailyReportPDF, exportDailyReportWord, exportDailyReportMarkdown } from '@/lib/export/daily-report';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   ScrollTextIcon,
@@ -29,6 +32,12 @@ import {
   ChevronDownIcon,
   LayoutGridIcon,
   Rows3Icon,
+  DownloadIcon,
+  FileTextIcon,
+  FileIcon,
+  FileTypeIcon,
+  UserIcon,
+  LogOutIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -78,20 +87,25 @@ const quickTemplates = [
       const tomorrow = new Date(date);
       tomorrow.setDate(date.getDate() + 1);
       const ts = `${tomorrow.getMonth() + 1}月${tomorrow.getDate()}日 ${weekdays[tomorrow.getDay()]}`;
-      return `今日工作总结（${ds}）\n1. \n2. \n3. \n\n明日工作安排（${ts}）\n1. \n2. \n3. `;
+      return `<h2>今日工作总结（${ds}）</h2><ol><li></li><li></li><li></li></ol><h2>明日工作安排（${ts}）</h2><ol><li></li><li></li><li></li></ol>`;
     },
   },
   {
     name: '学习笔记',
     icon: '📚',
-    content: () => `学习内容：\n- \n\n收获与心得：\n- \n\n待深入：\n- `,
+    content: () => `<h2>学习内容</h2><ul><li></li></ul><h2>收获与心得</h2><ul><li></li></ul><h2>待深入</h2><ul><li></li></ul>`,
   },
   {
     name: '简短记录',
     icon: '⚡',
-    content: () => `今天做了：\n`,
+    content: () => `<p>今天做了：</p>`,
   },
 ];
+
+// 去除 HTML 标签，检查纯文本是否为空
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').trim();
+}
 
 // 格式化日期为 YYYY-MM-DD（本地时间，避免时区偏移）
 function formatDateISO(date: Date): string {
@@ -153,6 +167,7 @@ function groupReportsByWeek(reports: DailyReport[]): Map<string, DailyReport[]> 
 
 export default function HomePage() {
   const router = useRouter();
+  const { user, logout } = useAuth();
   const [reports, setReports] = useState<DailyReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
@@ -251,15 +266,15 @@ export default function HomePage() {
   }, [weeklyReports]);
 
   const handleSubmit = async () => {
-    if (!selectedDate || !title.trim() || !content.trim()) return;
+    if (!selectedDate || !title.trim() || !stripHtml(content)) return;
 
     setSaving(true);
     try {
-      const dateStr = selectedDate.toISOString().split('T')[0];
+      const dateStr = formatDateISO(selectedDate);
 
       const method = editingReport ? 'PUT' : 'POST';
       const body = editingReport
-        ? { id: editingReport.id, title, content, mood, tags }
+        ? { id: editingReport.id, date: dateStr, title, content, mood, tags }
         : { date: dateStr, title, content, mood, tags };
 
       const response = await fetch('/api/daily-reports', {
@@ -268,7 +283,7 @@ export default function HomePage() {
         body: JSON.stringify(body),
       });
 
-      if (!response.ok) {
+      if (!response.ok && response.status >= 500) {
         console.error('API 响应异常:', response.status, response.statusText);
       }
 
@@ -330,7 +345,13 @@ export default function HomePage() {
 
   const openEditDialog = (report: DailyReport) => {
     setEditingReport(report);
-    setSelectedDate(new Date(report.date));
+    const dateStr = String(report.date || '').slice(0, 10);
+    const parts = dateStr.split('-');
+    const y = Number(parts[0]) || new Date().getFullYear();
+    const m = Number(parts[1]) || (new Date().getMonth() + 1);
+    const d = Number(parts[2]) || new Date().getDate();
+    const parsed = new Date(y, m - 1, d);
+    setSelectedDate(isNaN(parsed.getTime()) ? new Date() : parsed);
     setTitle(report.title);
     setContent(report.content);
     setMood(report.mood || '');
@@ -342,7 +363,7 @@ export default function HomePage() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      if (title.trim() && content.trim() && !saving) {
+      if (title.trim() && stripHtml(content) && !saving) {
         handleSubmit();
       }
     }
@@ -420,6 +441,20 @@ export default function HomePage() {
                 <span className="hidden sm:inline">笔记</span>
               </Button>
             </Link>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                  <UserIcon className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{user?.display_name || user?.username || '用户'}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={logout} className="gap-2 text-xs">
+                  <LogOutIcon className="w-3.5 h-3.5" />
+                  退出登录
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5 text-xs" onClick={() => setEditingReport(null)}>
@@ -427,9 +462,9 @@ export default function HomePage() {
                   写日报
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-[560px] max-h-[85vh] overflow-y-auto p-0">
+              <DialogContent className="max-w-[560px] max-h-[85vh] flex flex-col p-0">
                 {/* ── Header: green surface with hero date ── */}
-                <div className="relative bg-primary px-6 pt-5 pb-6 overflow-hidden">
+                <div className="relative bg-primary px-6 pt-5 pb-6 overflow-hidden flex-shrink-0">
                   {/* Subtle grain texture */}
                   <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\'/%3E%3C/svg%3E")' }} />
 
@@ -464,7 +499,7 @@ export default function HomePage() {
                       <PopoverContent className="w-auto p-0" align="end">
                         <Calendar
                           mode="single"
-                          selected={selectedDate}
+                          selected={selectedDate instanceof Date && !isNaN(selectedDate.getTime()) ? selectedDate : new Date()}
                           onSelect={setSelectedDate}
                         />
                       </PopoverContent>
@@ -473,7 +508,7 @@ export default function HomePage() {
                 </div>
 
                 {/* ── Body ── */}
-                <div className="px-6 pt-6 pb-5 space-y-6" onKeyDown={handleKeyDown}>
+                <div className="px-6 pt-6 pb-5 space-y-6 flex-1 overflow-y-auto min-h-0" onKeyDown={handleKeyDown}>
                   {/* Title: large, commanding */}
                   <input
                     value={title}
@@ -498,19 +533,13 @@ export default function HomePage() {
                   </div>
 
                   {/* Content */}
-                  <div>
-                    <Textarea
-                      value={content}
-                      onChange={(e) => setContent(e.target.value)}
-                      placeholder="记录今天的工作、学习、生活..."
-                      rows={10}
-                      className="resize-none text-sm leading-[1.8] focus-visible:ring-primary/30 bg-muted/30 border-border/40"
-                    />
-                    <div className="flex items-center justify-between mt-2">
-                      <p className="text-[11px] text-muted-foreground/60">支持 Markdown</p>
-                      <p className="text-[11px] text-muted-foreground/60 tabular-nums">{content.length} 字</p>
-                    </div>
-                  </div>
+                  <RichTextEditor
+                    value={content}
+                    onChange={setContent}
+                    placeholder="记录今天的工作、学习、生活..."
+                    minHeight="200px"
+                    maxHeight="320px"
+                  />
 
                   {/* Mood: large expressive emojis */}
                   <div>
@@ -581,7 +610,7 @@ export default function HomePage() {
                 </div>
 
                 {/* ── Footer ── */}
-                <div className="px-6 py-5 border-t border-border/40 flex items-center justify-between">
+                <div className="px-6 py-5 border-t border-border/40 flex items-center justify-between flex-shrink-0">
                   <button
                     type="button"
                     onClick={resetForm}
@@ -598,7 +627,7 @@ export default function HomePage() {
                     <button
                       type="button"
                       onClick={handleSubmit}
-                      disabled={!title.trim() || !content.trim() || saving}
+                      disabled={!title.trim() || !stripHtml(content) || saving}
                       className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 shadow-sm"
                     >
                       {saving ? <Spinner className="w-3.5 h-3.5" /> : <SendIcon className="w-3.5 h-3.5" />}
@@ -829,7 +858,7 @@ export default function HomePage() {
                                   {report.title}
                                 </h4>
                                 <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed mb-3">
-                                  {report.content}
+                                  {stripHtml(report.content)}
                                 </p>
                                 {report.tags && report.tags.length > 0 && (
                                   <div className="flex gap-1.5 flex-wrap mb-2">
@@ -853,6 +882,33 @@ export default function HomePage() {
                                     <SquarePenIcon className="w-3 h-3" />
                                     编辑
                                   </Button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 text-[11px] gap-1 px-2 text-muted-foreground hover:text-foreground"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <DownloadIcon className="w-3 h-3" />
+                                        导出
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-36">
+                                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportPDF(report); }} className="gap-2 text-xs">
+                                        <FileTextIcon className="w-3.5 h-3.5 text-red-500" />
+                                        导出 PDF
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportWord(report); }} className="gap-2 text-xs">
+                                        <FileIcon className="w-3.5 h-3.5 text-blue-500" />
+                                        导出 Word
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportMarkdown(report); }} className="gap-2 text-xs">
+                                        <FileTypeIcon className="w-3.5 h-3.5 text-green-500" />
+                                        导出 Markdown
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -919,7 +975,7 @@ export default function HomePage() {
                       {report.title}
                     </h4>
                     <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed mb-3">
-                      {report.content}
+                      {stripHtml(report.content)}
                     </p>
                     {report.tags && report.tags.length > 0 && (
                       <div className="flex gap-1.5 flex-wrap mb-2">
@@ -943,6 +999,33 @@ export default function HomePage() {
                         <SquarePenIcon className="w-3 h-3" />
                         编辑
                       </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-[11px] gap-1 px-2 text-muted-foreground hover:text-foreground"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <DownloadIcon className="w-3 h-3" />
+                            导出
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-36">
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportPDF(report); }} className="gap-2 text-xs">
+                            <FileTextIcon className="w-3.5 h-3.5 text-red-500" />
+                            导出 PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportWord(report); }} className="gap-2 text-xs">
+                            <FileIcon className="w-3.5 h-3.5 text-blue-500" />
+                            导出 Word
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); exportDailyReportMarkdown(report); }} className="gap-2 text-xs">
+                            <FileTypeIcon className="w-3.5 h-3.5 text-green-500" />
+                            导出 Markdown
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button
                         variant="ghost"
                         size="sm"
