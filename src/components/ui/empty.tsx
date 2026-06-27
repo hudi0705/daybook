@@ -1,104 +1,91 @@
-import { cva, type VariantProps } from "class-variance-authority"
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { cn } from "@/lib/utils";
 
-import { cn } from "@/lib/utils"
-
-function Empty({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="empty"
-      className={cn(
-        "flex min-w-0 flex-1 flex-col items-center justify-center gap-6 rounded-lg border-dashed p-6 text-center text-balance md:p-12",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-function EmptyHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="empty-header"
-      className={cn(
-        "flex max-w-sm flex-col items-center gap-2 text-center",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-const emptyMediaVariants = cva(
-  "flex shrink-0 items-center justify-center mb-2 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-  {
-    variants: {
-      variant: {
-        default: "bg-transparent",
-        icon: "bg-muted text-foreground flex size-10 shrink-0 items-center justify-center rounded-lg [&_svg:not([class*='size-'])]:size-6",
-      },
+const emptyVariants = cva("flex flex-col items-center justify-center py-12 px-4 text-center", {
+  variants: {
+    size: {
+      default: "py-12",
+      sm: "py-8",
+      lg: "py-16",
     },
-    defaultVariants: {
-      variant: "default",
-    },
+  },
+  defaultVariants: {
+    size: "default",
+  },
+});
+
+export interface EmptyProps
+  extends React.HTMLAttributes<HTMLDivElement>,
+    VariantProps<typeof emptyVariants> {}
+
+const Empty = React.forwardRef<HTMLDivElement, EmptyProps>(
+  ({ className, size, ...props }, ref) => {
+    return (
+      <div
+        ref={ref}
+        className={cn(emptyVariants({ size, className }))}
+        {...props}
+      />
+    );
   }
-)
+);
+Empty.displayName = "Empty";
 
-function EmptyMedia({
-  className,
-  variant = "default",
-  ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof emptyMediaVariants>) {
+const EmptyHeader = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => {
   return (
     <div
-      data-slot="empty-icon"
-      data-variant={variant}
-      className={cn(emptyMediaVariants({ variant, className }))}
+      ref={ref}
+      className={cn("flex flex-col items-center gap-2", className)}
       {...props}
     />
-  )
-}
+  );
+});
+EmptyHeader.displayName = "EmptyHeader";
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
+const EmptyTitle = React.forwardRef<
+  HTMLHeadingElement,
+  React.HTMLAttributes<HTMLHeadingElement>
+>(({ className, ...props }, ref) => {
+  return (
+    <h3
+      ref={ref}
+      className={cn("text-lg font-semibold text-foreground", className)}
+      {...props}
+    />
+  );
+});
+EmptyTitle.displayName = "EmptyTitle";
+
+const EmptyDescription = React.forwardRef<
+  HTMLParagraphElement,
+  React.HTMLAttributes<HTMLParagraphElement>
+>(({ className, ...props }, ref) => {
+  return (
+    <p
+      ref={ref}
+      className={cn("text-sm text-muted-foreground max-w-sm", className)}
+      {...props}
+    />
+  );
+});
+EmptyDescription.displayName = "EmptyDescription";
+
+const EmptyMedia = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => {
   return (
     <div
-      data-slot="empty-title"
-      className={cn("text-lg font-medium tracking-tight", className)}
+      ref={ref}
+      className={cn("mb-4 text-muted-foreground", className)}
       {...props}
     />
-  )
-}
+  );
+});
+EmptyMedia.displayName = "EmptyMedia";
 
-function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
-  return (
-    <div
-      data-slot="empty-description"
-      className={cn(
-        "text-muted-foreground [&>a:hover]:text-primary text-sm/relaxed [&>a]:underline [&>a]:underline-offset-4",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="empty-content"
-      className={cn(
-        "flex w-full max-w-sm min-w-0 flex-col items-center gap-4 text-sm text-balance",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-export {
-  Empty,
-  EmptyHeader,
-  EmptyTitle,
-  EmptyDescription,
-  EmptyContent,
-  EmptyMedia,
-}
+export { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia };

@@ -1,4 +1,4 @@
-﻿// 数据库实体类型
+// 数据库实体类型
 
 export interface Note {
   id: number;

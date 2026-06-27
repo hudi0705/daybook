@@ -26,14 +26,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchUser = useCallback(async () => {
     try {
+      const token = localStorage.getItem('daybook_token');
+      if (!token) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
       const res = await fetch('/api/auth/me', {
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       const data = await res.json();
       if (data.success) {
-        setUser(data.data);
+        setUser(data.data.user || data.data);
       } else {
         setUser(null);
+        // token 无效时清除
+        localStorage.removeItem('daybook_token');
       }
     } catch {
       setUser(null);
@@ -48,10 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
+      const token = localStorage.getItem('daybook_token');
       await fetch('/api/auth/logout', {
         method: 'POST',
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
+      localStorage.removeItem('daybook_token');
       setUser(null);
       window.location.href = '/login';
     } catch (err) {

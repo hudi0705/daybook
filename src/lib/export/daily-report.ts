@@ -1,5 +1,3 @@
-'use client';
-
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas-pro';
 import {
@@ -64,18 +62,20 @@ function htmlToMarkdown(html: string): string {
         return children.trim().split('\n').map(l => `> ${l}`).join('\n') + '\n\n';
       case 'ul': return children;
       case 'ol': return children;
-      case 'li':
+      case 'li': {
         const parent = el.parentElement?.tagName.toLowerCase();
         if (parent === 'ol') {
           const idx = Array.from(el.parentElement!.children).indexOf(el) + 1;
           return `${idx}. ${children.trim()}\n`;
         }
         return `- ${children.trim()}\n`;
+      }
       case 'hr': return '\n---\n\n';
       case 'br': return '\n';
-      case 'a':
+      case 'a': {
         const href = el.getAttribute('href') || '';
         return `[${children.trim()}](${href})`;
+      }
       default: return children;
     }
   }

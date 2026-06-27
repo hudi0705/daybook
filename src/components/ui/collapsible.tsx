@@ -1,33 +1,71 @@
-"use client"
+import * as React from 'react';
+import { cn } from '@/lib/utils';
 
-import * as CollapsiblePrimitive from "@radix-ui/react-collapsible"
-
-function Collapsible({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
+interface CollapsibleProps {
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  children: React.ReactNode;
 }
 
-function CollapsibleTrigger({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
+interface CollapsibleContextType {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+const CollapsibleContext = React.createContext<CollapsibleContextType>({
+  open: false,
+  onOpenChange: () => {},
+});
+
+function Collapsible({ open: controlledOpen, defaultOpen = false, onOpenChange, children }: CollapsibleProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+
+  const handleOpenChange = React.useCallback(
+    (value: boolean) => {
+      if (!isControlled) {
+        setUncontrolledOpen(value);
+      }
+      onOpenChange?.(value);
+    },
+    [isControlled, onOpenChange],
+  );
+
   return (
-    <CollapsiblePrimitive.CollapsibleTrigger
-      data-slot="collapsible-trigger"
-      {...props}
-    />
-  )
+    <CollapsibleContext.Provider value={{ open, onOpenChange: handleOpenChange }}>
+      {children}
+    </CollapsibleContext.Provider>
+  );
 }
 
-function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
+function CollapsibleTrigger({ className, children, ...props }: React.ComponentProps<'button'>) {
+  const { open, onOpenChange } = React.useContext(CollapsibleContext);
+
   return (
-    <CollapsiblePrimitive.CollapsibleContent
-      data-slot="collapsible-content"
+    <button
+      type="button"
+      data-state={open ? 'open' : 'closed'}
+      className={className}
+      onClick={() => onOpenChange(!open)}
       {...props}
-    />
-  )
+    >
+      {children}
+    </button>
+  );
 }
 
-export { Collapsible, CollapsibleTrigger, CollapsibleContent }
+function CollapsibleContent({ className, children, ...props }: React.ComponentProps<'div'>) {
+  const { open } = React.useContext(CollapsibleContext);
+
+  if (!open) return null;
+
+  return (
+    <div data-state={open ? 'open' : 'closed'} className={cn(className)} {...props}>
+      {children}
+    </div>
+  );
+}
+
+export { Collapsible, CollapsibleTrigger, CollapsibleContent };

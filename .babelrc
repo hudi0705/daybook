@@ -1,15 +1,12 @@
 {
   "presets": [
+    "@babel/preset-typescript",
     [
-      "next/babel",
+      "@babel/preset-react",
       {
-        "preset-react": {
-          "development": true
-        }
+        "runtime": "automatic"
       }
     ]
   ],
-  "plugins": [
-    "@react-dev-inspector/babel-plugin"
-  ]
+  "plugins": []
 }
