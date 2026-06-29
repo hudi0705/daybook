@@ -12,10 +12,10 @@ import { settingsRouter } from './api/settings/index.js';
 import { contributionRouter } from './api/contribution/index.js';
 import { gitRouter } from './api/git/index.js';
 
-// 打包成 exe 后，以 exe 所在目录为基准查找 .env 和 dist/；
-// 普通 node 运行时则以当前工作目录为基准。
-const isPackaged = !!(process as { pkg?: unknown }).pkg;
-const baseDir = isPackaged ? path.dirname(process.execPath) : process.cwd();
+// Electron 会把后端作为子进程运行，并通过 DAYBOOK_RESOURCES_PATH 指向 resources 目录。
+// pkg 单文件 exe 则使用 exe 所在目录；普通开发环境使用当前工作目录。
+const baseDir = process.env.DAYBOOK_RESOURCES_PATH
+  || ((process as { pkg?: unknown }).pkg ? path.dirname(process.execPath) : process.cwd());
 
 dotenv.config({ path: path.join(baseDir, '.env') });
 
@@ -45,7 +45,7 @@ app.use('/api/git', gitRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ app: 'daybook', status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // ── 托管前端静态文件（dist/）──

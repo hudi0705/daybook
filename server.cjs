@@ -1,3 +1,4 @@
+const importMetaUrl = require('url').pathToFileURL(__filename).href;
 "use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -47089,6 +47090,12 @@ authRouter.put("/password", authMiddleware, async (req, res) => {
 
 // server/api/daily-reports/index.ts
 var import_express2 = __toESM(require_express2(), 1);
+function formatDateLocal(d) {
+  const year2 = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day2 = String(d.getDate()).padStart(2, "0");
+  return `${year2}-${month}-${day2}`;
+}
 var dailyReportsRouter = (0, import_express2.Router)();
 dailyReportsRouter.use(authMiddleware);
 dailyReportsRouter.get("/stats/summary", async (req, res) => {
@@ -47107,7 +47114,7 @@ dailyReportsRouter.get("/stats/summary", async (req, res) => {
     const lastDate = dateRows[0]?.lastDate || null;
     const fmtDate = (d) => {
       if (!d) return null;
-      if (d instanceof Date) return d.toISOString().split("T")[0];
+      if (d instanceof Date) return formatDateLocal(d);
       return String(d).split("T")[0];
     };
     const [allDates] = await db_default.execute(
@@ -47295,30 +47302,69 @@ dailyReportsRouter.post("/git-generate", async (req, res) => {
     errorResponse(res, "AI \u914D\u7F6E\u662F\u5FC5\u9700\u7684");
     return;
   }
-  const limitedCommits = commits.slice(0, 15);
+  const limitedCommits = commits.slice(0, 20);
+  const basePrompt = [
+    "\u4F60\u662F\u4E00\u4E2A\u8D44\u6DF1\u7814\u53D1\u540C\u4E8B\uFF0C\u6B63\u5728\u6839\u636E Git \u63D0\u4EA4\u8BB0\u5F55\u6574\u7406\u5DE5\u4F5C\u65E5\u62A5\u3002",
+    "\u65E5\u62A5\u8981\u50CF\u771F\u5B9E\u7684\u4EBA\u5199\u7ED9\u56E2\u961F\u770B\u7684\u5DE5\u4F5C\u8BB0\u5F55\uFF1A\u6E05\u695A\u3001\u5177\u4F53\u3001\u53EF\u590D\u76D8\uFF0C\u4E0D\u8981\u8425\u9500\u8154\u3001\u4E0D\u8981\u7A7A\u8BDD\u5957\u8BDD\u3002",
+    "\u53EA\u4F9D\u636E\u63D0\u4F9B\u7684\u63D0\u4EA4\u8BB0\u5F55\u603B\u7ED3\uFF0C\u4E0D\u8981\u7F16\u9020\u672A\u51FA\u73B0\u7684\u4E1A\u52A1\u3001\u6570\u636E\u3001\u7F3A\u9677\u6216\u660E\u65E5\u8BA1\u5212\u3002",
+    "\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u6E32\u67D3\u7684 HTML \u7247\u6BB5\uFF0C\u53EA\u4F7F\u7528 h1/h2/h3/p/ul/ol/li/code/strong \u6807\u7B7E\uFF0C\u4E0D\u8981 Markdown \u4EE3\u7801\u5757\u3002",
+    "\u6BCF\u4E2A\u5DE5\u4F5C\u8981\u70B9\u5C3D\u91CF\u5199\u6E05\u695A\u201C\u505A\u4E86\u4EC0\u4E48\u3001\u5F71\u54CD\u4E86\u4EC0\u4E48\u3001\u5BF9\u5E94 commit\u201D\uFF0C\u5E76\u5728\u53E5\u5C3E\u6807\u6CE8\u77ED\u54C8\u5E0C\uFF0C\u4F8B\u5982 <code>350f425a3</code>\u3002",
+    "\u5C06\u540C\u7C7B\u63D0\u4EA4\u5408\u5E76\u6210\u6A21\u5757\uFF0C\u4E0D\u8981\u673A\u68B0\u5730\u9010\u6761\u590D\u8FF0 commit message\u3002"
+  ].join("\n");
   const stylePrompts = {
-    detailed: "\u751F\u6210\u8BE6\u7EC6\u7684\u65E5\u62A5\uFF0C\u5305\u542B\u5B8C\u6574\u7684\u5DE5\u4F5C\u5185\u5BB9\u3001\u6280\u672F\u7EC6\u8282\u3001\u9047\u5230\u7684\u95EE\u9898\u548C\u89E3\u51B3\u65B9\u6848\u3002",
-    concise: "\u751F\u6210\u7B80\u6D01\u7684\u65E5\u62A5\uFF0C\u53EA\u5217\u51FA\u5173\u952E\u5DE5\u4F5C\u70B9\u548C\u6210\u679C\u3002",
-    technical: "\u751F\u6210\u6280\u672F\u5411\u65E5\u62A5\uFF0C\u4FA7\u91CD\u6280\u672F\u5B9E\u73B0\u3001\u4EE3\u7801\u53D8\u66F4\u3001\u67B6\u6784\u6539\u52A8\u3002",
-    report: "\u751F\u6210\u6C47\u62A5\u5411\u65E5\u62A5\uFF0C\u9002\u5408\u5411\u4E0A\u7EA7\u6C47\u62A5\uFF0C\u7A81\u51FA\u6210\u679C\u548C\u4EF7\u503C\u3002"
+    detailed: [
+      "\u98CE\u683C\uFF1A\u8BE6\u7EC6\u590D\u76D8\u578B\u3002",
+      "\u7ED3\u6784\uFF1A<h1>\u5DE5\u4F5C\u65E5\u62A5 - \u65E5\u671F</h1>\u3001<h2>\u4ECA\u65E5\u6982\u89C8</h2>\u3001<h2>\u5B8C\u6210\u5DE5\u4F5C</h2>\u3001<h2>\u6280\u672F\u7EC6\u8282</h2>\u3001<h2>\u98CE\u9669\u4E0E\u5F85\u8DDF\u8FDB</h2>\u3002",
+      "\u4ECA\u65E5\u6982\u89C8\u7528 2-3 \u53E5\u8BDD\u603B\u7ED3\uFF1B\u5B8C\u6210\u5DE5\u4F5C\u6309\u6A21\u5757\u5206\u7EC4\uFF0C\u6BCF\u4E2A\u6A21\u5757 2-4 \u6761\uFF1B\u6280\u672F\u7EC6\u8282\u53EA\u5199\u4ECE\u63D0\u4EA4\u8BB0\u5F55\u80FD\u5224\u65AD\u51FA\u7684\u5B9E\u73B0\u70B9\u3002"
+    ].join("\n"),
+    concise: [
+      "\u98CE\u683C\uFF1A\u7B80\u6D01\u91CD\u70B9\u578B\u3002",
+      "\u7ED3\u6784\uFF1A<h1>\u5DE5\u4F5C\u65E5\u62A5 - \u65E5\u671F</h1>\u3001<h2>\u91CD\u70B9\u6458\u8981</h2>\u3001<h2>\u5B8C\u6210\u4E8B\u9879</h2>\u3001<h2>\u5F85\u8DDF\u8FDB</h2>\u3002",
+      "\u63A7\u5236\u7BC7\u5E45\uFF0C\u4F18\u5148\u4FDD\u7559\u7ED3\u679C\u3001\u5F71\u54CD\u548C\u5173\u952E commit\uFF0C\u907F\u514D\u94FA\u9648\u80CC\u666F\u3002"
+    ].join("\n"),
+    technical: [
+      "\u98CE\u683C\uFF1A\u6280\u672F\u5B9E\u73B0\u578B\u3002",
+      "\u7ED3\u6784\uFF1A<h1>\u6280\u672F\u65E5\u62A5 - \u65E5\u671F</h1>\u3001<h2>\u6539\u52A8\u6982\u89C8</h2>\u3001<h2>\u5B9E\u73B0\u7EC6\u8282</h2>\u3001<h2>\u5DE5\u7A0B\u8D28\u91CF</h2>\u3001<h2>\u540E\u7EED\u5173\u6CE8</h2>\u3002",
+      "\u7A81\u51FA\u4EE3\u7801\u7ED3\u6784\u3001\u63A5\u53E3\u3001\u6784\u5EFA\u3001\u6027\u80FD\u3001\u4FEE\u590D\u3001\u6D4B\u8BD5\u7B49\u5DE5\u7A0B\u4FE1\u606F\uFF1B\u4E0D\u786E\u5B9A\u7684\u5730\u65B9\u5199\u201C\u63D0\u4EA4\u8BB0\u5F55\u672A\u4F53\u73B0\u201D\u3002"
+    ].join("\n"),
+    report: [
+      "\u98CE\u683C\uFF1A\u7BA1\u7406\u6C47\u62A5\u578B\u3002",
+      "\u7ED3\u6784\uFF1A<h1>\u5DE5\u4F5C\u65E5\u62A5 - \u65E5\u671F</h1>\u3001<h2>\u4ECA\u65E5\u6210\u679C</h2>\u3001<h2>\u4EF7\u503C\u4E0E\u5F71\u54CD</h2>\u3001<h2>\u5173\u952E\u8FDB\u5C55</h2>\u3001<h2>\u98CE\u9669\u4E0E\u652F\u6301\u9700\u6C42</h2>\u3002",
+      "\u8BED\u8A00\u9762\u5411\u4E0A\u7EA7/\u534F\u4F5C\u65B9\uFF0C\u7A81\u51FA\u4EA4\u4ED8\u4EF7\u503C\u548C\u8FDB\u5C55\uFF0C\u4F46\u4E0D\u8981\u5938\u5927\u63D0\u4EA4\u8BB0\u5F55\u6CA1\u6709\u4F53\u73B0\u7684\u7ED3\u679C\u3002"
+    ].join("\n")
   };
   const style = ai_config.style || "detailed";
   let systemPrompt;
   if (style === "pony") {
-    systemPrompt = `\u4F60\u662F\u7814\u53D1\u65E5\u62A5\u52A9\u624B\uFF0C\u4E25\u683C\u6309\u300C\u5C0F\u9A6C\u7B14\u8BB0\u65E5\u62A5\u300D\u7ED3\u6784\u751F\u6210\u65E5\u62A5\uFF0C\u4EC5\u4F9D\u636E\u63D0\u4F9B\u7684\u63D0\u4EA4\u8BB0\u5F55\u3001\u4E0D\u8981\u7F16\u9020\u5185\u5BB9\u3002\u4F7F\u7528 HTML\uFF1A<h1> \u4F5C\u4E3A\u6807\u9898\uFF0C<h2> \u8868\u793A\u201C\u4E00\u3001\u4E8C\u3001\u2026\u201D\u5927\u6807\u9898\uFF0C<h3> \u8868\u793A\u201C2.1\u30012.2\u2026\u201D\u5C0F\u8282\uFF0C<ul>/<li> \u5217\u8981\u70B9\uFF0C\u5E76\u5728\u6BCF\u6761\u8981\u70B9\u672B\u5C3E\u7528 <code> \u6807\u6CE8\u5BF9\u5E94\u7684 commit \u77ED\u54C8\u5E0C\uFF08\u5982 <code>350f425a3</code>\uFF09\u3002\u7ED3\u6784\u5982\u4E0B\uFF1A
-\u6807\u9898\uFF1A\u5C0F\u9A6C\u7B14\u8BB0\u65E5\u62A5 - ${date}
-\u4E00\u3001\u4ECA\u65E5\u63D0\u4EA4\u7EDF\u8BA1\uFF1A\u9879\u76EE\u540D\u79F0\u3001\u5206\u652F\u3001\u63D0\u4EA4\u6570\uFF08\u4E0D\u542B Merge\uFF09\u3002\u9879\u76EE\u540D\u4E0E\u5206\u652F\u82E5\u65E0\u6CD5\u4ECE\u63D0\u4EA4\u4FE1\u606F\u5224\u65AD\u5219\u5199\u201C\u672A\u77E5\u201D\uFF0C\u63D0\u4EA4\u6570\u6309\u4E0B\u65B9\u63D0\u4F9B\u7684\u8BB0\u5F55\u6761\u6570\u7EDF\u8BA1\u3002
-\u4E8C\u3001\u5B8C\u6210\u5DE5\u4F5C\uFF1A\u6309\u529F\u80FD/\u6A21\u5757\u5206\u7EC4\uFF1B\u91CD\u70B9\u6A21\u5757\u62C6\u5206\u4E3A 2.1\u30012.2 \u7B49\u5C0F\u8282\uFF0C\u6BCF\u6761\u8BF4\u660E\u6539\u52A8\u5185\u5BB9\u5E76\u9644\u5BF9\u5E94 commit \u77ED\u54C8\u5E0C\uFF1B\u82E5\u67D0\u63D0\u4EA4\u4E3A revert/\u64A4\u9500\uFF0C\u5F52\u5165\u201C\u5DF2\u64A4\u9500\u7684\u4FEE\u6539\u201D\u5C0F\u8282\u5E76\u6CE8\u660E\u539F\u56E0\u3002
-\u4E09\u3001\u5F85\u5904\u7406\u4E8B\u9879\uFF1A\u5217\u51FA\u672A\u5B8C\u6210\u6216\u9700\u8DDF\u8FDB\u7684\u4E8B\u9879\uFF0C\u6CA1\u6709\u5219\u5199\u201C\u65E0\u201D\u3002
-\u56DB\u3001\u5176\u4ED6\u9879\u76EE\uFF1A\u4ECA\u65E5\u65E0\u63D0\u4EA4\u7684\u5176\u5B83\u9879\u76EE\u6807\u6CE8\u201C\u4ECA\u65E5\u65E0\u63D0\u4EA4\u201D\uFF0C\u6CA1\u6709\u53EF\u7701\u7565\u8BE5\u8282\u3002
-\u4E94\u3001\u5907\u6CE8\uFF1A\u7528\u4E00\u53E5\u8BDD\u603B\u7ED3\u4ECA\u65E5\u5DE5\u4F5C\u91CD\u70B9\u3002`;
+    systemPrompt = `${basePrompt}
+
+\u4E25\u683C\u6309\u300C\u5C0F\u9A6C\u7B14\u8BB0\u65E5\u62A5\u300D\u7ED3\u6784\u8F93\u51FA\uFF1A
+<h1>\u5C0F\u9A6C\u7B14\u8BB0\u65E5\u62A5 - ${date}</h1>
+<h2>\u4E00\u3001\u4ECA\u65E5\u63D0\u4EA4\u7EDF\u8BA1</h2>
+<ul><li>\u63D0\u4EA4\u6570\u6309\u63D0\u4F9B\u8BB0\u5F55\u6761\u6570\u7EDF\u8BA1\uFF1B\u9879\u76EE\u540D\u79F0\u3001\u5206\u652F\u65E0\u6CD5\u5224\u65AD\u65F6\u5199\u201C\u672A\u77E5\u201D\u3002</li></ul>
+<h2>\u4E8C\u3001\u5B8C\u6210\u5DE5\u4F5C</h2>
+<h3>2.1 \u6A21\u5757\u540D\u79F0</h3>
+<ul><li>\u6309\u529F\u80FD/\u6A21\u5757\u5206\u7EC4\u63CF\u8FF0\u6539\u52A8\uFF0C\u5E76\u9644\u5BF9\u5E94 commit \u77ED\u54C8\u5E0C\u3002</li></ul>
+<h2>\u4E09\u3001\u5F85\u5904\u7406\u4E8B\u9879</h2>
+<ul><li>\u53EA\u5217\u63D0\u4EA4\u8BB0\u5F55\u80FD\u63A8\u65AD\u7684\u5F85\u529E\uFF1B\u6CA1\u6709\u5219\u5199\u201C\u65E0\u201D\u3002</li></ul>
+<h2>\u56DB\u3001\u5176\u4ED6\u9879\u76EE</h2>
+<p>\u6CA1\u6709\u53EF\u7701\u7565\uFF1B\u4E0D\u8981\u865A\u6784\u5176\u5B83\u9879\u76EE\u3002</p>
+<h2>\u4E94\u3001\u5907\u6CE8</h2>
+<p>\u7528\u4E00\u53E5\u8BDD\u603B\u7ED3\u4ECA\u65E5\u5DE5\u4F5C\u91CD\u70B9\u3002</p>`;
   } else {
-    systemPrompt = `\u6839\u636E Git \u63D0\u4EA4\u751F\u6210\u65E5\u62A5\u3002${stylePrompts[style] || stylePrompts.detailed}\u683C\u5F0F\uFF1A\u4ECA\u65E5\u5DE5\u4F5C\u603B\u7ED3\u3001\u4E3B\u8981\u5DE5\u4F5C\u5185\u5BB9\u3001\u6280\u672F\u8981\u70B9\u3001\u660E\u65E5\u8BA1\u5212\u3002\u4F7F\u7528 HTML \u683C\u5F0F\uFF08h2/ol/ul/li\uFF09\uFF0C\u8BED\u8A00\u7B80\u6D01\u4E13\u4E1A\u3002`;
+    systemPrompt = `${basePrompt}
+
+${stylePrompts[style] || stylePrompts.detailed}`;
   }
   const userPrompt = `\u65E5\u671F\uFF1A${date}
 
 \u63D0\u4EA4\u8BB0\u5F55\uFF08${limitedCommits.length} \u6761\uFF09\uFF1A
-${limitedCommits.map((c, i) => `${i + 1}. [${String(c.hash || "").slice(0, 9)}] ${c.message}${c.author ? ` (@${c.author})` : ""}`).join("\n")}`;
+${limitedCommits.map((c, i) => {
+    const hash2 = String(c.hash || "").slice(0, 9);
+    const files = Array.isArray(c.files) && c.files.length > 0 ? `
+   \u53D8\u66F4\u6587\u4EF6\uFF1A${c.files.slice(0, 8).join(", ")}${c.files.length > 8 ? " \u7B49" : ""}` : "";
+    return `${i + 1}. [${hash2}] ${c.message}${c.author ? ` (@${c.author})` : ""}${files}`;
+  }).join("\n")}`;
   try {
     const modelId = ai_config.modelId || ai_config.modelName || "deepseek-chat";
     const response = await fetch(`${ai_config.baseUrl}/chat/completions`, {
@@ -47334,8 +47380,8 @@ ${limitedCommits.map((c, i) => `${i + 1}. [${String(c.hash || "").slice(0, 9)}] 
           { role: "user", content: userPrompt }
         ],
         stream: true,
-        temperature: 0.7,
-        max_tokens: 2048
+        temperature: 0.45,
+        max_tokens: 2600
       }),
       signal: AbortSignal.timeout(12e4)
     });
@@ -47398,7 +47444,7 @@ function formatReport(row) {
   return {
     id: row.id,
     userId: row.user_id,
-    date: row.date instanceof Date ? row.date.toISOString().split("T")[0] : row.date,
+    date: row.date instanceof Date ? formatDateLocal(row.date) : row.date,
     title: row.title || "",
     content: row.content,
     mood: row.mood || void 0,
@@ -47409,9 +47455,9 @@ function formatReport(row) {
 }
 function calculateStreak(dates) {
   if (dates.length === 0) return 0;
-  const sorted = dates.map((d) => d instanceof Date ? d.toISOString().split("T")[0] : String(d));
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-  const yesterday = new Date(Date.now() - 864e5).toISOString().split("T")[0];
+  const sorted = dates.map((d) => d instanceof Date ? formatDateLocal(d) : String(d));
+  const today = formatDateLocal(/* @__PURE__ */ new Date());
+  const yesterday = formatDateLocal(new Date(Date.now() - 864e5));
   if (sorted[0] !== today && sorted[0] !== yesterday) return 0;
   let streak = 1;
   for (let i = 1; i < sorted.length; i++) {
@@ -47835,6 +47881,12 @@ settingsRouter.put("/project-path", async (req, res) => {
 
 // server/api/contribution/index.ts
 var import_express6 = __toESM(require_express2(), 1);
+function formatDateLocal2(d) {
+  const year2 = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day2 = String(d.getDate()).padStart(2, "0");
+  return `${year2}-${month}-${day2}`;
+}
 var contributionRouter = (0, import_express6.Router)();
 contributionRouter.use(authMiddleware);
 contributionRouter.get("/", async (req, res) => {
@@ -47853,7 +47905,7 @@ contributionRouter.get("/", async (req, res) => {
     const [rows] = await db_default.execute(query, params);
     const counts = {};
     for (const row of rows) {
-      const dateStr = row.date instanceof Date ? row.date.toISOString().split("T")[0] : String(row.date);
+      const dateStr = row.date instanceof Date ? formatDateLocal2(row.date) : String(row.date);
       counts[dateStr] = (counts[dateStr] || 0) + 1;
     }
     const data = Object.entries(counts).map(([date, count]) => ({ date, count })).sort((a, b) => a.date.localeCompare(b.date));
@@ -48027,8 +48079,7 @@ gitRouter.get("/commits/:hash/files", async (req, res) => {
 });
 
 // server/index.ts
-var isPackaged = !!process.pkg;
-var baseDir = isPackaged ? import_path.default.dirname(process.execPath) : process.cwd();
+var baseDir = process.env.DAYBOOK_RESOURCES_PATH || (process.pkg ? import_path.default.dirname(process.execPath) : process.cwd());
 import_dotenv.default.config({ path: import_path.default.join(baseDir, ".env") });
 var app = (0, import_express8.default)();
 var PORT = process.env.PORT || 5e3;
@@ -48050,7 +48101,7 @@ app.use("/api/settings", settingsRouter);
 app.use("/api/contribution", contributionRouter);
 app.use("/api/git", gitRouter);
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+  res.json({ app: "daybook", status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
 });
 var staticDir = import_path.default.join(baseDir, "dist");
 if (import_fs2.default.existsSync(staticDir)) {

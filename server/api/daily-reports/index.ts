@@ -9,6 +9,16 @@ import {
   paginatedResponse,
 } from '../../utils/response.js';
 
+/**
+ * Format a Date object to local date string (YYYY-MM-DD) without UTC conversion
+ */
+function formatDateLocal(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export const dailyReportsRouter = Router();
 
 dailyReportsRouter.use(authMiddleware);
@@ -38,7 +48,7 @@ dailyReportsRouter.get('/stats/summary', async (req: AuthRequest, res: Response)
     // Helper to safely format a date value (may be Date object or string from MySQL)
     const fmtDate = (d: any): string | null => {
       if (!d) return null;
-      if (d instanceof Date) return d.toISOString().split('T')[0];
+      if (d instanceof Date) return formatDateLocal(d);
       return String(d).split('T')[0];
     };
 
@@ -285,26 +295,59 @@ dailyReportsRouter.post('/git-generate', async (req: AuthRequest, res: Response)
     return;
   }
 
-  // 限制提交记录数量（最多 15 条）
-  const limitedCommits = commits.slice(0, 15);
+  // 限制提交记录数量，避免提示词过长影响生成质量。
+  const limitedCommits = commits.slice(0, 20);
 
-  // 根据风格生成不同的系统提示
+  const basePrompt = [
+    '你是一个资深研发同事，正在根据 Git 提交记录整理工作日报。',
+    '日报要像真实的人写给团队看的工作记录：清楚、具体、可复盘，不要营销腔、不要空话套话。',
+    '只依据提供的提交记录总结，不要编造未出现的业务、数据、缺陷或明日计划。',
+    '输出必须是可直接渲染的 HTML 片段，只使用 h1/h2/h3/p/ul/ol/li/code/strong 标签，不要 Markdown 代码块。',
+    '每个工作要点尽量写清楚“做了什么、影响了什么、对应 commit”，并在句尾标注短哈希，例如 <code>350f425a3</code>。',
+    '将同类提交合并成模块，不要机械地逐条复述 commit message。',
+  ].join('\n');
+
   const stylePrompts: Record<string, string> = {
-    detailed: '生成详细的日报，包含完整的工作内容、技术细节、遇到的问题和解决方案。',
-    concise: '生成简洁的日报，只列出关键工作点和成果。',
-    technical: '生成技术向日报，侧重技术实现、代码变更、架构改动。',
-    report: '生成汇报向日报，适合向上级汇报，突出成果和价值。',
+    detailed: [
+      '风格：详细复盘型。',
+      '结构：<h1>工作日报 - 日期</h1>、<h2>今日概览</h2>、<h2>完成工作</h2>、<h2>技术细节</h2>、<h2>风险与待跟进</h2>。',
+      '今日概览用 2-3 句话总结；完成工作按模块分组，每个模块 2-4 条；技术细节只写从提交记录能判断出的实现点。',
+    ].join('\n'),
+    concise: [
+      '风格：简洁重点型。',
+      '结构：<h1>工作日报 - 日期</h1>、<h2>重点摘要</h2>、<h2>完成事项</h2>、<h2>待跟进</h2>。',
+      '控制篇幅，优先保留结果、影响和关键 commit，避免铺陈背景。',
+    ].join('\n'),
+    technical: [
+      '风格：技术实现型。',
+      '结构：<h1>技术日报 - 日期</h1>、<h2>改动概览</h2>、<h2>实现细节</h2>、<h2>工程质量</h2>、<h2>后续关注</h2>。',
+      '突出代码结构、接口、构建、性能、修复、测试等工程信息；不确定的地方写“提交记录未体现”。',
+    ].join('\n'),
+    report: [
+      '风格：管理汇报型。',
+      '结构：<h1>工作日报 - 日期</h1>、<h2>今日成果</h2>、<h2>价值与影响</h2>、<h2>关键进展</h2>、<h2>风险与支持需求</h2>。',
+      '语言面向上级/协作方，突出交付价值和进展，但不要夸大提交记录没有体现的结果。',
+    ].join('\n'),
   };
   const style = ai_config.style || 'detailed';
 
   let systemPrompt: string;
   if (style === 'pony') {
-    systemPrompt = `你是研发日报助手，严格按「小马笔记日报」结构生成日报，仅依据提供的提交记录、不要编造内容。使用 HTML：<h1> 作为标题，<h2> 表示“一、二、…”大标题，<h3> 表示“2.1、2.2…”小节，<ul>/<li> 列要点，并在每条要点末尾用 <code> 标注对应的 commit 短哈希（如 <code>350f425a3</code>）。结构如下：\n标题：小马笔记日报 - ${date}\n一、今日提交统计：项目名称、分支、提交数（不含 Merge）。项目名与分支若无法从提交信息判断则写“未知”，提交数按下方提供的记录条数统计。\n二、完成工作：按功能/模块分组；重点模块拆分为 2.1、2.2 等小节，每条说明改动内容并附对应 commit 短哈希；若某提交为 revert/撤销，归入“已撤销的修改”小节并注明原因。\n三、待处理事项：列出未完成或需跟进的事项，没有则写“无”。\n四、其他项目：今日无提交的其它项目标注“今日无提交”，没有可省略该节。\n五、备注：用一句话总结今日工作重点。`;
+    systemPrompt = `${basePrompt}\n\n严格按「小马笔记日报」结构输出：\n<h1>小马笔记日报 - ${date}</h1>\n<h2>一、今日提交统计</h2>\n<ul><li>提交数按提供记录条数统计；项目名称、分支无法判断时写“未知”。</li></ul>\n<h2>二、完成工作</h2>\n<h3>2.1 模块名称</h3>\n<ul><li>按功能/模块分组描述改动，并附对应 commit 短哈希。</li></ul>\n<h2>三、待处理事项</h2>\n<ul><li>只列提交记录能推断的待办；没有则写“无”。</li></ul>\n<h2>四、其他项目</h2>\n<p>没有可省略；不要虚构其它项目。</p>\n<h2>五、备注</h2>\n<p>用一句话总结今日工作重点。</p>`;
   } else {
-    systemPrompt = `根据 Git 提交生成日报。${stylePrompts[style] || stylePrompts.detailed}格式：今日工作总结、主要工作内容、技术要点、明日计划。使用 HTML 格式（h2/ol/ul/li），语言简洁专业。`;
+    systemPrompt = `${basePrompt}\n\n${stylePrompts[style] || stylePrompts.detailed}`;
   }
 
-  const userPrompt = `日期：${date}\n\n提交记录（${limitedCommits.length} 条）：\n${limitedCommits.map((c: any, i: number) => `${i + 1}. [${String(c.hash || '').slice(0, 9)}] ${c.message}${c.author ? ` (@${c.author})` : ''}`).join('\n')}`;
+  const userPrompt = `日期：${date}
+
+提交记录（${limitedCommits.length} 条）：
+${limitedCommits.map((c: any, i: number) => {
+  const hash = String(c.hash || '').slice(0, 9);
+  const files = Array.isArray(c.files) && c.files.length > 0
+    ? `\n   变更文件：${c.files.slice(0, 8).join(', ')}${c.files.length > 8 ? ' 等' : ''}`
+    : '';
+  return `${i + 1}. [${hash}] ${c.message}${c.author ? ` (@${c.author})` : ''}${files}`;
+}).join('\n')}`;
 
   try {
     const modelId = ai_config.modelId || ai_config.modelName || 'deepseek-chat';
@@ -321,8 +364,8 @@ dailyReportsRouter.post('/git-generate', async (req: AuthRequest, res: Response)
           { role: 'user', content: userPrompt },
         ],
         stream: true,
-        temperature: 0.7,
-        max_tokens: 2048,
+        temperature: 0.45,
+        max_tokens: 2600,
       }),
       signal: AbortSignal.timeout(120000),
     });
@@ -397,7 +440,7 @@ function formatReport(row: any) {
   return {
     id: row.id,
     userId: row.user_id,
-    date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+    date: row.date instanceof Date ? formatDateLocal(row.date) : row.date,
     title: row.title || '',
     content: row.content,
     mood: row.mood || undefined,
@@ -411,9 +454,9 @@ function calculateStreak(dates: any[]): number {
   if (dates.length === 0) return 0;
 
   // dates come sorted DESC from the query, may be Date objects from MySQL
-  const sorted = dates.map(d => d instanceof Date ? d.toISOString().split('T')[0] : String(d));
-  const today = new Date().toISOString().split('T')[0];
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const sorted = dates.map(d => d instanceof Date ? formatDateLocal(d) : String(d));
+  const today = formatDateLocal(new Date());
+  const yesterday = formatDateLocal(new Date(Date.now() - 86400000));
 
   // Streak must include today or yesterday
   if (sorted[0] !== today && sorted[0] !== yesterday) return 0;
